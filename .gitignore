@@ -1,0 +1,9 @@
+enron_data_fraud_labeled.*
+dataset/**.csv
+dataset/**.zip
+__pycache__/**
+progress.txt
+phishing_api/models/*
+webui/__pycache__/*
+phishing_api/tests/__pycache__/*
+**/__pycache__/**

@@ -1,0 +1,40 @@
+body {
+    font-family: Arial, sans-serif;
+    margin: 20px;
+    background: #f9fafc;
+}
+
+section {
+    margin-bottom: 40px;
+    padding: 15px;
+    border: 1px solid #ccc;
+    background: #fff;
+    border-radius: 5px;
+}
+
+section h2 {
+    margin-top: 0;
+    color: #333;
+}
+
+label {
+    font-weight: bold;
+    display: block;
+    margin-top: 10px;
+}
+
+input, select, button, textarea {
+    margin: 5px 0;
+    width: 100%;
+    max-width: 500px;
+    padding: 8px;
+    box-sizing: border-box;
+}
+
+.result {
+    margin-top: 10px;
+    padding: 10px;
+    background: #eef;
+    border-radius: 4px;
+    word-wrap: break-word;
+}
