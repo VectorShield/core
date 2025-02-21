@@ -6,7 +6,7 @@ from qdrant_client import QdrantClient
 from qdrant_client.http.exceptions import UnexpectedResponse
 from qdrant_client.http.models import VectorParams, Distance
 
-from .config import QDRANT_URL, COLLECTION_NAME
+from .config import QDRANT_URL, COLLECTION_NAME, MODEL_DIMENSION
 
 logger = logging.getLogger("phishing_api")
 
@@ -22,7 +22,7 @@ except UnexpectedResponse as e:
         logger.info(f"Collection '{COLLECTION_NAME}' does not exist. Creating it now...")
         client.create_collection(
             collection_name=COLLECTION_NAME,
-            vectors_config=VectorParams(size=768, distance=Distance.COSINE),
+            vectors_config=VectorParams(size=MODEL_DIMENSION, distance=Distance.COSINE),
         )
     else:
         raise

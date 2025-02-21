@@ -36,29 +36,52 @@ def get_email_type(label):
 # 🚀 Test Script Configuration
 # -------------------------------
 analyze_api_url = "http://localhost:5000/analyze"
-sample_size = 50  # Number of random entries to test
+sample_size = 500  # Total number of random entries to test
 
 # -------------------------------
 # 🎯 Prepare Sample Data
 # -------------------------------
-# Randomly select rows, ensuring reproducibility with random_state=42
-if len(data) < sample_size:
-    print(f"⚠ The dataset has fewer than {sample_size} entries. Testing all available rows.")
-    sample_data = data
-else:
-    sample_data = data.sample(n=sample_size, random_state=int(time.time()))
+# Separate spam (phishing) and ham (legitimate)
+spam_data = data[data["Label"] == 1]
+ham_data = data[data["Label"] == 0]
 
-# Metrics counters
+# Define the desired ratio
+spam_ratio = 0.3  # 30% spam
+ham_ratio = 0.7   # 70% ham
+
+# Calculate how many spam and ham samples to pick
+spam_sample_size = int(sample_size * spam_ratio)
+ham_sample_size = sample_size - spam_sample_size
+
+# Check if we have enough spam/ham emails
+if len(spam_data) < spam_sample_size or len(ham_data) < ham_sample_size:
+    print("⚠ Not enough spam or ham to meet the desired ratio.")
+    # In this fallback, sample everything we can while respecting the ratio if possible
+    spam_sample_size = min(len(spam_data), spam_sample_size)
+    ham_sample_size = min(len(ham_data), ham_sample_size)
+
+# Now sample spam and ham separately
+spam_sample = spam_data.sample(n=spam_sample_size, random_state=int(time.time()))
+ham_sample = ham_data.sample(n=ham_sample_size, random_state=int(time.time()))
+
+# Combine them into a single DataFrame
+sample_data = pd.concat([spam_sample, ham_sample]).sample(frac=1, random_state=int(time.time()))
+
+if len(sample_data) == 0:
+    print("⚠ No data available for testing after applying ratio-based sampling.")
+    exit(1)
+
+# -------------------------------
+# 🔍 Initialize Metrics
+# -------------------------------
 total_tested = 0
 correct_classifications = 0
 false_positives = 0  # predicted phishing, actually legitimate
 false_negatives = 0  # predicted legitimate, actually phishing
 
-# Count of phishing (spam) and legitimate (ham) emails
 spam_count = 0  # Number of phishing emails tested
 ham_count = 0   # Number of legitimate emails tested
 
-# Confidence level statistics
 high_confidence = 0
 medium_confidence = 0
 low_confidence = 0
@@ -81,7 +104,7 @@ for index, row in sample_data.iterrows():
         else:
             ham_count += 1
 
-        # If Body is empty or very short, skip or handle as needed
+        # If Body is empty or very short, handle or skip
         if not email_body_raw.strip():
             pass  # Optionally skip or continue
 
@@ -137,7 +160,6 @@ else:
     false_positive_rate = (false_positives / total_tested) * 100
     false_negative_rate = (false_negatives / total_tested) * 100
 
-    # Calculate confidence level percentages
     high_confidence_rate = (high_confidence / total_tested) * 100
     medium_confidence_rate = (medium_confidence / total_tested) * 100
     low_confidence_rate = (low_confidence / total_tested) * 100
@@ -151,7 +173,6 @@ else:
     print(f"False Negatives: {false_negatives} ({false_negative_rate:.2f}%)")
     print(f"Overall Accuracy: {accuracy:.2f}%")
 
-    # Print confidence level statistics
     print("\n🔍 Confidence Level Statistics:")
     print(f"High Confidence: {high_confidence} ({high_confidence_rate:.2f}%)")
     print(f"Medium Confidence: {medium_confidence} ({medium_confidence_rate:.2f}%)")
