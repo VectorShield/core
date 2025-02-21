@@ -15,7 +15,12 @@ QDRANT_URL = os.getenv("QDRANT_URL", "http://192.168.117.177:6333")
 COLLECTION_NAME = "emails"
 
 # model
-MODEL_PATH = os.getenv("MODEL_PATH", "models/all-MiniLM-L6-v2")
+MODEL_PATH = os.getenv("MODEL_PATH", "models/deberta-v3-base")
+MODEL_NAME = os.getenv("MODEL_NAME", "microsoft/deberta-v3-base")
+# MODEL_NAME = "microsoft/deberta-v3-base"  # Or "distilbert-base-uncased"
+# MODEL_PATH = "models/deberta-v3-base"  # Adjust for DistilBERT
+
+# MODEL_PATH = os.getenv("MODEL_PATH", "models/all-MiniLM-L6-v2")
 
 # Batch Upsert
 BATCH_SIZE = 10

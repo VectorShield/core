@@ -22,7 +22,7 @@ except UnexpectedResponse as e:
         logger.info(f"Collection '{COLLECTION_NAME}' does not exist. Creating it now...")
         client.create_collection(
             collection_name=COLLECTION_NAME,
-            vectors_config=VectorParams(size=384, distance=Distance.COSINE),
+            vectors_config=VectorParams(size=768, distance=Distance.COSINE),
         )
     else:
         raise

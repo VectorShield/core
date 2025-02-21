@@ -9,25 +9,25 @@ services:
     restart: always
     volumes:
       - qdrant_data:/qdrant/storage
-  api:
-    build:
-      context: phishing_api
-    # dockerfile: 
-    ports:
-      - "5000:5000"
-    depends_on:
-      - qdrant
-    restart: always
+  # api:
+  #   build:
+  #     context: phishing_api
+  #   # dockerfile: 
+  #   ports:
+  #     - "5000:5000"
+  #   depends_on:
+  #     - qdrant
+  #   restart: always
 
-  ui:
-    build:
-      context: webui
-    # dockerfile: 
-    ports:
-      - "8000:8000"
-    depends_on:
-      - api
-    restart: always
+  # ui:
+  #   build:
+  #     context: webui
+  #   # dockerfile: 
+  #   ports:
+  #     - "8000:8000"
+  #   depends_on:
+    #   - api
+    # restart: always
 
 volumes:
   qdrant_data:

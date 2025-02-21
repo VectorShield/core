@@ -14,20 +14,45 @@ def analyze_email(email: EmailRequest):
     Analyze an email against the Qdrant vector store to determine a phishing score.
     """
     logger.info(f"[/analyze] subject={email.subject}")
-    feats = extract_email_features(email)
-    score, reasons, closest_label = check_email_similarity(feats)
 
-    if score >= 70:
-        conf = "High"
-    elif score >= 40:
-        conf = "Medium"
-    else:
-        conf = "Low"
+    try:
+        feats = extract_email_features(email)
+        score, reasons, closest_label = check_email_similarity(feats)
 
-    logger.info(f"Analyzed -> score={score}, conf={conf}, label={closest_label}")
-    return AnalyzeResponse(
-        phishing_score=score,
-        confidence_level=conf,
-        closest_match=closest_label,
-        reasons=reasons
-    )
+        # Ensure valid values before assigning confidence level
+        if score is None:
+            logger.error("❌ Error: 'score' is None")
+            score = 0  # Default safe value
+        if reasons is None:
+            logger.error("❌ Error: 'reasons' is None")
+            reasons = ["Error: No reasons provided."]
+        if closest_label is None:
+            logger.error("❌ Error: 'closest_label' is None")
+            closest_label = "Unknown"
+
+        # ✅ Ensure confidence level is assigned correctly
+        if score >= 70:
+            conf = "High"
+        elif score >= 40:
+            conf = "Medium"
+        else:
+            conf = "Low"
+
+        logger.info(f"✅ Analyzed -> score={score}, conf={conf}, label={closest_label}")
+
+        return AnalyzeResponse(
+            phishing_score=score,
+            confidence_level=conf,
+            closest_match=closest_label,
+            reasons=reasons
+        )
+
+    except Exception as e:
+        logger.exception(f"❌ Exception occurred while analyzing email: {e}")
+
+        return AnalyzeResponse(
+            phishing_score=0,
+            confidence_level="Unknown",
+            closest_match="Unknown",
+            reasons=[f"Error: {str(e)}"]
+        )

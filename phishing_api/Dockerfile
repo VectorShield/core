@@ -37,3 +37,4 @@ EXPOSE 5000
 
 # Use Gunicorn for better performance (adjust workers as needed)
 ENTRYPOINT ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "5000"]
+# uvicorn app.main:app --host 0.0.0.0 --port 5000
