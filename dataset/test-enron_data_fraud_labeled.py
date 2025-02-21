@@ -58,6 +58,11 @@ false_negatives = 0  # predicted legitimate, actually phishing
 spam_count = 0  # Number of phishing emails tested
 ham_count = 0   # Number of legitimate emails tested
 
+# Confidence level statistics
+high_confidence = 0
+medium_confidence = 0
+low_confidence = 0
+
 # -------------------------------
 # 🔍 Validate Each Email
 # -------------------------------
@@ -96,6 +101,17 @@ for index, row in sample_data.iterrows():
 
         if response.status_code == 200:
             total_tested += 1
+            # Extract confidence level
+            confidence_level = response_data.get("confidence_level", "Unknown")
+
+            # Count confidence levels
+            if confidence_level == "High":
+                high_confidence += 1
+            elif confidence_level == "Medium":
+                medium_confidence += 1
+            elif confidence_level == "Low":
+                low_confidence += 1
+
             # Simple thresholding logic: phishing_score >= 70 => "phishing"
             predicted_type = "phishing" if response_data["phishing_score"] >= 70 else "legitimate"
 
@@ -121,6 +137,11 @@ else:
     false_positive_rate = (false_positives / total_tested) * 100
     false_negative_rate = (false_negatives / total_tested) * 100
 
+    # Calculate confidence level percentages
+    high_confidence_rate = (high_confidence / total_tested) * 100
+    medium_confidence_rate = (medium_confidence / total_tested) * 100
+    low_confidence_rate = (low_confidence / total_tested) * 100
+
     print("\n📊 Test Summary:")
     print(f"Total Emails Tested: {total_tested}")
     print(f"Total Spam Emails Tested: {spam_count}")
@@ -129,3 +150,9 @@ else:
     print(f"False Positives: {false_positives} ({false_positive_rate:.2f}%)")
     print(f"False Negatives: {false_negatives} ({false_negative_rate:.2f}%)")
     print(f"Overall Accuracy: {accuracy:.2f}%")
+
+    # Print confidence level statistics
+    print("\n🔍 Confidence Level Statistics:")
+    print(f"High Confidence: {high_confidence} ({high_confidence_rate:.2f}%)")
+    print(f"Medium Confidence: {medium_confidence} ({medium_confidence_rate:.2f}%)")
+    print(f"Low Confidence: {low_confidence} ({low_confidence_rate:.2f}%)")
