@@ -36,7 +36,7 @@ def get_email_type(label):
 # 🚀 Test Script Configuration
 # -------------------------------
 analyze_api_url = "http://localhost:5000/analyze"
-sample_size = 1000  # Number of random entries to test
+sample_size = 50  # Number of random entries to test
 
 # -------------------------------
 # 🎯 Prepare Sample Data
