@@ -6,6 +6,7 @@ from .logging_config import setup_logging
 from .config import API_TITLE, API_VERSION
 from .routes.metrics import PrometheusMiddleware, metrics_router
 from .routes.insert import insert_router
+from .database import ensure_collection_exists
 from .routes.analyze import analyze_router
 from .routes.report import report_router
 from .routes.parse_eml import parse_eml_router
@@ -43,6 +44,8 @@ logger.info("API started")
 # Initialize background batch upsert
 @app.on_event("startup")
 async def startup_event():
+    # FIRST: Make sure the collection exists
+    await ensure_collection_exists()
     await init_batch_upsert()  # Ensure async function is awaited
 
 ### start ! note that the start can take a while
