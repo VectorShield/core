@@ -8,7 +8,7 @@ import time
 # 📁 Setup File Paths
 # -------------------------------
 current_dir = os.path.dirname(os.path.abspath("__file__"))
-csv_file_path = os.path.join(current_dir, "dataset", "enron_data_fraud_labeled.csv")
+csv_file_path = os.path.join(current_dir, "dataset", "test_data-enron_data_fraud_labeled.csv")
 
 # -------------------------------
 # 📦 Load Dataset

@@ -25,7 +25,7 @@ async def batch_upsert():
             while batch_queue:
                 points.append(batch_queue.popleft())
 
-            client.upsert(COLLECTION_NAME, points)
+            await client.upsert(COLLECTION_NAME, points)
             logger.info(f"✅ Upserted {len(points)} points to Qdrant.")
             last_upsert_time = time.perf_counter()
 

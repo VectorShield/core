@@ -39,6 +39,6 @@ class PrometheusMiddleware(BaseHTTPMiddleware):
 metrics_router = APIRouter()
 
 @metrics_router.get("/metrics")
-def metrics():
-    """Expose Prometheus metrics."""
+async def metrics():
+    """Expose Prometheus metrics asynchronously."""
     return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)

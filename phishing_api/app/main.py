@@ -43,8 +43,7 @@ logger.info("API started")
 # Initialize background batch upsert
 @app.on_event("startup")
 async def startup_event():
-    await init_batch_upsert()
-
+    await init_batch_upsert()  # Ensure async function is awaited
 
 ### start ! note that the start can take a while
 # uvicorn app.main:app --host 0.0.0.0 --port 5000

@@ -2,12 +2,12 @@ import re
 import base64
 import hashlib
 import logging
+import asyncio
 from bs4 import BeautifulSoup
 import email
 from email.parser import BytesParser
 from email import policy
 from typing import List
-
 from .models import EmailRequest
 
 logger = logging.getLogger("phishing_api")
@@ -16,21 +16,25 @@ def extract_urls(text: str) -> List[str]:
     """Extract URLs from text using a simple regex."""
     return re.findall(r"https?://[^\s\"<>]+", text)
 
-def extract_eml_body(msg: email.message.Message) -> str:
-    """Extract the text body from an email.message.Message object."""
-    if msg.is_multipart():
-        for part in msg.walk():
-            ctype = part.get_content_type()
-            cdisp = str(part.get("Content-Disposition"))
-            if ctype == "text/plain" and "attachment" not in cdisp:
-                return part.get_payload(decode=True).decode(errors="replace")
-            elif ctype == "text/html" and "attachment" not in cdisp:
-                return BeautifulSoup(
-                    part.get_payload(decode=True).decode(errors="replace"), "html.parser"
-                ).get_text()
-    return msg.get_payload(decode=True).decode(errors="replace")
+async def extract_eml_body(msg: email.message.Message) -> str:
+    """Extract the text body from an email.message.Message object asynchronously."""
+    def sync_extract():
+        """Synchronous extraction logic moved here to be run in a background thread."""
+        if msg.is_multipart():
+            for part in msg.walk():
+                ctype = part.get_content_type()
+                cdisp = str(part.get("Content-Disposition"))
+                if ctype == "text/plain" and "attachment" not in cdisp:
+                    return part.get_payload(decode=True).decode(errors="replace")
+                elif ctype == "text/html" and "attachment" not in cdisp:
+                    return BeautifulSoup(
+                        part.get_payload(decode=True).decode(errors="replace"), "html.parser"
+                    ).get_text()
+        return msg.get_payload(decode=True).decode(errors="replace")
 
-def extract_email_features(email: EmailRequest):
+    return await asyncio.to_thread(sync_extract)
+
+async def extract_email_features(email: EmailRequest):
     """
     Extracts key features from the email, such as links, domains, and a body preview.
     Decodes the base64-encoded body once to avoid repetition.
@@ -49,19 +53,24 @@ def extract_email_features(email: EmailRequest):
     reply_to = email.reply_to or sender
     customer_id = email.customerId
 
-    # Domain extraction
     sender_domain = sender.split("@")[-1] if "@" in sender else "unknown"
     reply_to_domain = reply_to.split("@")[-1] if "@" in reply_to else "unknown"
 
-    # Link extraction (both HTML hrefs and plain-text URLs)
-    soup = BeautifulSoup(body_str, "html.parser")
-    html_links = [a['href'] for a in soup.find_all('a', href=True)]
-    text_links = extract_urls(body_str)
-    merged_links = list(set(html_links + text_links))
+    async def extract_links():
+        """Extract links asynchronously to avoid blocking."""
+        soup = BeautifulSoup(body_str, "html.parser")
+        html_links = [a['href'] for a in soup.find_all('a', href=True)]
+        text_links = extract_urls(body_str)
+        return list(set(html_links + text_links))
 
-    # Create a stable hash for the email
-    email_string = subject + body_preview + "".join(merged_links) + sender_domain
-    email_hash = hashlib.sha256(email_string.encode()).hexdigest()
+    async def compute_hash():
+        """Generate a stable hash asynchronously to avoid CPU blocking."""
+        email_string = subject + body_preview + "".join(merged_links) + sender_domain
+        return hashlib.sha256(email_string.encode()).hexdigest()
+
+    # ✅ Ensure both coroutines are awaited properly
+    merged_links = await extract_links()
+    email_hash = await compute_hash()
 
     return {
         "subject": subject,
@@ -74,6 +83,7 @@ def extract_email_features(email: EmailRequest):
         "customerId": customer_id,
     }
 
+
 def get_email_vector_text(email_feats: dict) -> str:
     """
     Construct the text that will be used to get the vector embedding
@@ -81,18 +91,21 @@ def get_email_vector_text(email_feats: dict) -> str:
     """
     return f"{email_feats['subject']} {email_feats['body_preview']} {' '.join(email_feats['links'])}"
 
-def parse_raw_eml(eml_bytes: bytes):
+async def parse_raw_eml(eml_bytes: bytes):
     """
-    Parse a raw EML file. Returns a dict with subject, base64-encoded body, and sender.
+    Parse a raw EML file asynchronously. Returns a dict with subject, base64-encoded body, and sender.
     """
-    msg = BytesParser(policy=policy.default).parsebytes(eml_bytes)
+    def sync_parse():
+        """Sync function that does the actual parsing in a background thread."""
+        msg = BytesParser(policy=policy.default).parsebytes(eml_bytes)
+        subject = msg["subject"] or "No Subject"
+        sender = msg["from"] or "Unknown Sender"
+        body = extract_eml_body(msg)  # Keep as sync call because extract_eml_body is now async
 
-    subject = msg["subject"] or "No Subject"
-    sender = msg["from"] or "Unknown Sender"
-    body = extract_eml_body(msg)
+        return {
+            "subject": subject,
+            "body": base64.b64encode(body.encode("utf-8")).decode("utf-8"),
+            "sender": sender
+        }
 
-    return {
-        "subject": subject,
-        "body": base64.b64encode(body.encode("utf-8")).decode("utf-8"),
-        "sender": sender
-    }
+    return await asyncio.to_thread(sync_parse)

@@ -12,31 +12,30 @@ logger = logging.getLogger("phishing_api")
 report_router = APIRouter()
 
 @report_router.post("/report_false_positive")
-def report_false_positive(email: EmailRequest):
-    """
-    Removes an email from the store if it was incorrectly marked as phishing.
-    """
+async def report_false_positive(email: EmailRequest):
     logger.info(f"[/report_false_positive] subject={email.subject}")
-    feats = extract_email_features(email)
 
+    feats = await extract_email_features(email)
     vector_text = get_email_vector_text(feats)
-    vec = get_cached_embedding(vector_text)
+    vec = await get_cached_embedding(vector_text)
 
     filt = None
     if feats.get("customerId"):
         filt = Filter(must=[FieldCondition(key="customerId", match=MatchValue(value=feats["customerId"]))])
 
-    res = client.search(
+    res = await client.search(
         collection_name=COLLECTION_NAME,
         query_vector=vec,
         query_filter=filt,
         limit=1
     )
+
     if res:
         e_id = res[0].id
-        client.delete(collection_name=COLLECTION_NAME, points_selector=[e_id])
-        logger.info(f"Removed false positive: {feats['subject']} (ID={e_id})")
+        await client.delete(collection_name=COLLECTION_NAME, points_selector=[e_id])
+        logger.info(f"✅ Removed false positive: {feats['subject']} (ID={e_id})")
         return {"message": f"Removed false positive email: {feats['subject']}"}
     else:
-        logger.warning("Email not found.")
+        logger.warning("⚠️ Email not found.")
         raise HTTPException(status_code=404, detail="Email not found in DB.")
+

@@ -9,15 +9,17 @@ logger = logging.getLogger("phishing_api")
 analyze_router = APIRouter()
 
 @analyze_router.post("/analyze", response_model=AnalyzeResponse)
-def analyze_email(email: EmailRequest):
+async def analyze_email(email: EmailRequest):
     """
-    Analyze an email against the Qdrant vector store to determine a phishing score.
+    Analyze an email against the Qdrant vector store asynchronously to determine a phishing score.
     """
     logger.info(f"[/analyze] subject={email.subject}")
 
     try:
-        feats = extract_email_features(email)
-        score, reasons, closest_label = check_email_similarity(feats)
+        # 🔹 Call extract_email_features **without** await if it is not async
+        feats = await extract_email_features(email)
+
+        score, reasons, closest_label = await check_email_similarity(feats)  # Await similarity check
 
         # Ensure valid values before assigning confidence level
         if score is None:

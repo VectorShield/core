@@ -1,9 +1,12 @@
 import uuid
 import logging
 import os
+import asyncio
 import torch
 import numpy as np
-from functools import lru_cache
+import types  # Import the `types` module
+
+# from functools import lru_cache
 from transformers import AutoModel, AutoTokenizer, DebertaV2Tokenizer  # Import DebertaV2Tokenizer
 
 from qdrant_client.http.models import Filter, FieldCondition, MatchValue, PointStruct
@@ -41,29 +44,42 @@ else:
 # 🔹 Ensure model is in evaluation mode
 model.eval()
 
-@lru_cache(maxsize=1000)
-def get_cached_embedding(text: str):
+async def get_cached_embedding(text: str):
+    """
+    Asynchronously generates an embedding for the given text using the loaded Transformer model.
+    """
+    return await asyncio.to_thread(sync_get_cached_embedding, text)
+
+def sync_get_cached_embedding(text: str):
+    """
+    Synchronous function that performs embedding generation.
+    This is called inside an asyncio thread to avoid blocking.
+    """
     inputs = tokenizer(text, return_tensors="pt", padding=True, truncation=True)
     with torch.no_grad():
         output = model(**inputs).last_hidden_state[:, 0, :]  # Use CLS token
-
+    
     return output.squeeze().tolist()  # ✅ Ensures it's a flat list of floats
 
 
-def store_email(email: EmailRequest, label: str, batch_queue) -> str:
+async def store_email(email: EmailRequest, label: str, batch_queue) -> str:
     """
-    Queues the email for batch upsert in Qdrant. Uses a unique ID based on
+    Asynchronously queues the email for batch upsert in Qdrant. Uses a unique ID based on
     hash + label to avoid duplicates.
     """
-    feats = extract_email_features(email)
-    feats["label"] = label
+    feats = await extract_email_features(email)  # ✅ Ensure this is awaited!
 
-    email_id_str = feats["email_hash"] + label
+    if not isinstance(feats, dict):  # Debugging step
+        raise TypeError(f"extract_email_features(email) returned {type(feats)}, expected dict")
+
+    feats["label"] = label
+    email_id_str = feats["email_hash"] + label  # ✅ This now works because feats is a dict
     email_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, email_id_str))
 
     # Build a single text string for the embedding
     vector_text = f"{feats['subject']} {feats['body_preview']} {' '.join(feats['links'])}"
-    vector_embedding = get_cached_embedding(vector_text)
+    
+    vector_embedding = await get_cached_embedding(vector_text)  # ✅ Await the async function
 
     # Create PointStruct and append to queue
     point = PointStruct(id=email_id, vector=vector_embedding, payload=feats)
@@ -75,24 +91,15 @@ def store_email(email: EmailRequest, label: str, batch_queue) -> str:
     )
     return f"✅ Queued {label} email: {feats['subject']}"
 
-def check_email_similarity(email_feats: dict):
-    """
-    Searches Qdrant for similar emails and computes a phishing score based on similarities.
-    Returns (phishing_score, reasons, closest_label).
-    """
-    from .utils import get_email_vector_text  # Avoid circular import
+
+async def check_email_similarity(email_feats: dict):
+    from .utils import get_email_vector_text
 
     try:
         vector_text = get_email_vector_text(email_feats)
-        vector_embedding = get_cached_embedding(vector_text)
+        vector_embedding = await get_cached_embedding(vector_text)
 
-        # Debugging: Ensure vector format is correct
-        if not isinstance(vector_embedding, list) or not all(isinstance(x, float) for x in vector_embedding):
-            logger.error(f"❌ Invalid vector format: {vector_embedding}")
-            return 0, ["Error: Invalid vector format"], "Unknown"
-
-        # Query Qdrant
-        results = client.search(
+        results = await client.search(
             collection_name=COLLECTION_NAME,
             query_vector=vector_embedding,
             limit=20
@@ -133,3 +140,11 @@ def check_email_similarity(email_feats: dict):
     except Exception as e:
         logger.error(f"❌ Qdrant search failed: {e}")
         return 0, ["Error searching Qdrant"], "Unknown"
+
+
+
+
+
+
+
+

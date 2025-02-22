@@ -9,7 +9,7 @@ import base64
 # -------------------------------
 current_dir = os.path.dirname(os.path.abspath("__file__"))  # Use os.getcwd() if running in Jupyter
 # zip_file_path = os.path.join(current_dir, "dataset", "enron_data_fraud_labeled.csv.zip")
-csv_file_path = os.path.join(current_dir, "dataset",  "enron_data_fraud_labeled.csv")
+csv_file_path = os.path.join(current_dir, "dataset",  "train_data-enron_data_fraud_labeled.csv")
 progress_file_path = os.path.join(current_dir, "dataset", "progress.txt")  # File to track the last processed row
 
 # -------------------------------
