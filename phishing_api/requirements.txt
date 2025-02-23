@@ -40,3 +40,4 @@ urllib3==2.3.0
 uvicorn==0.34.0
 sentencepiece==0.2.0
 pytest-asyncio==0.25.3
+sentry-sdk==2.22.0

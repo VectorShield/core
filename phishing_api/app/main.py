@@ -1,6 +1,7 @@
 import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+import sentry_sdk
 
 from .logging_config import setup_logging
 from .config import API_TITLE, API_VERSION
@@ -16,6 +17,22 @@ from .batch_upsert import init_batch_upsert
 setup_logging()
 
 logger = logging.getLogger("phishing_api")
+
+sentry_sdk.init(
+    dsn="https://62070df56536d744deb5335983041800@o507054.ingest.us.sentry.io/4508866643099648",
+    # Add data like request headers and IP for users,
+    # see https://docs.sentry.io/platforms/python/data-management/data-collected/ for more info
+    send_default_pii=True,
+    # Set traces_sample_rate to 1.0 to capture 100%
+    # of transactions for tracing.
+    traces_sample_rate=None,
+    # _experiments={
+    #     # Set continuous_profiling_auto_start to True
+    #     # to automatically start the profiler on when
+    #     # possible.
+    #     "continuous_profiling_auto_start": True,
+    # },
+)
 
 # Create FastAPI application
 app = FastAPI(title=API_TITLE, version=API_VERSION)
