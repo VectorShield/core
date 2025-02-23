@@ -24,6 +24,17 @@ COLLECTION_NAME = "emails"
 MODEL_NAME = os.getenv("MODEL_NAME", "microsoft/all-MiniLM-L6-v2")
 MODEL_PATH = os.getenv("MODEL_PATH", "models/all-MiniLM-L6-v2")
 MODEL_DIMENSION = int(os.getenv("MODEL_DIMENSION", "384"))
+# Total Emails Tested: 1865
+# Total Spam Emails Tested: 465
+# Total Ham Emails Tested: 1400
+# Correct Classifications: 1468
+# False Positives: 0 (0.00%)
+# False Negatives: 397 (21.29%)
+# Overall Accuracy: 78.71%
+# 🔍 Confidence Level Statistics:
+# High Confidence: 68 (3.65%)
+# Medium Confidence: 1 (0.05%)
+# Low Confidence: 1796 (96.30%
 
 
 # MODEL_NAME = os.getenv("MODEL_NAME", "Intel/dynamic_tinybert")

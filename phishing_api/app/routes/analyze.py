@@ -11,39 +11,33 @@ analyze_router = APIRouter()
 @analyze_router.post("/analyze", response_model=AnalyzeResponse)
 async def analyze_email(email: EmailRequest):
     """
-    Analyze an email against the Qdrant vector store asynchronously to determine a phishing score.
+    Analyze an email by extracting features (including the full body for in-memory embedding)
+    and then checking similarity against Qdrant via a chunk-based embedding approach.
     """
     logger.info(f"[/analyze] subject={email.subject}")
 
     try:
-        # 🔹 Call extract_email_features **without** await if it is not async
+        # 1) Extract features from the email (stores full body in memory but not in Qdrant)
         feats = await extract_email_features(email)
 
-        score, reasons, closest_label = await check_email_similarity(feats)  # Await similarity check
+        # 2) Compute phishing score, reasons, and closest label
+        phishing_score, reasons, closest_label = await check_email_similarity(feats)
 
-        # Ensure valid values before assigning confidence level
-        if score is None:
-            logger.error("❌ Error: 'score' is None")
-            score = 0  # Default safe value
-        if reasons is None:
-            logger.error("❌ Error: 'reasons' is None")
-            reasons = ["Error: No reasons provided."]
-        if closest_label is None:
-            logger.error("❌ Error: 'closest_label' is None")
-            closest_label = "Unknown"
-
-        # ✅ Ensure confidence level is assigned correctly
-        if score >= 70:
+        # 3) Derive confidence level from phishing score
+        if phishing_score >= 80:
             conf = "High"
-        elif score >= 40:
+        elif phishing_score >= 60:
             conf = "Medium"
         else:
             conf = "Low"
 
-        logger.info(f"✅ Analyzed -> score={score}, conf={conf}, label={closest_label}")
+        logger.info(
+            f"✅ Analyzed -> score={phishing_score}, conf={conf}, label={closest_label}"
+        )
 
+        # 4) Return an AnalyzeResponse
         return AnalyzeResponse(
-            phishing_score=score,
+            phishing_score=phishing_score,
             confidence_level=conf,
             closest_match=closest_label,
             reasons=reasons
