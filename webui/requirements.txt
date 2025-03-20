@@ -11,7 +11,7 @@ grpcio-tools==1.70.0
 h11==0.14.0
 httpx==0.28.1
 idna==3.10
-Jinja2==3.1.5
+Jinja2==3.1.6
 joblib==1.4.2
 MarkupSafe==3.0.2
 networkx==3.4.2
