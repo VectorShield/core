@@ -34,9 +34,9 @@ COLLECTION_NAME = "emails"
 # Avg PhishSim: 8.538
 # Avg LegitSim: 41.449
 
-# MODEL_NAME = os.getenv("MODEL_NAME", "microsoft/all-MiniLM-L6-v2")
-# MODEL_PATH = os.getenv("MODEL_PATH", "models/all-MiniLM-L6-v2")
-# MODEL_DIMENSION = int(os.getenv("MODEL_DIMENSION", "384"))
+MODEL_NAME = os.getenv("MODEL_NAME", "microsoft/all-MiniLM-L6-v2")
+MODEL_PATH = os.getenv("MODEL_PATH", "models/all-MiniLM-L6-v2")
+MODEL_DIMENSION = int(os.getenv("MODEL_DIMENSION", "384"))
 # Total Emails Tested: 1865
 # Total Spam Emails Tested: 465
 # Total Ham Emails Tested: 1400
@@ -50,9 +50,9 @@ COLLECTION_NAME = "emails"
 # Low Confidence: 1796 (96.30%
 
 
-MODEL_NAME = os.getenv("MODEL_NAME", "Intel/dynamic_tinybert")
-MODEL_PATH = os.getenv("MODEL_PATH", "models/dynamic_tinybert")
-MODEL_DIMENSION = int(os.getenv("MODEL_DIMENSION", "768"))
+# MODEL_NAME = os.getenv("MODEL_NAME", "Intel/dynamic_tinybert")
+# MODEL_PATH = os.getenv("MODEL_PATH", "models/dynamic_tinybert")
+# MODEL_DIMENSION = int(os.getenv("MODEL_DIMENSION", "768"))
 # 📊 Test Summary:
 # Total Emails Tested: 570
 # Correct Classifications: 444 (77.89%)

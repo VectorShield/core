@@ -20,9 +20,9 @@ splits = {
 # -------------------------------
 # ⚙️ API Endpoints
 # -------------------------------
-INSERT_API_URL = f"{os.getenv("API_URL", "http://localhost")}/insert"
+INSERT_API_URL = f"{os.getenv("API_URL", "http://localhost:5000")}/insert"
 # INSERT_API_URL = "http://localhost:5000/insert"
-ANALYZE_API_URL = f"{os.getenv("API_URL", "http://localhost")}/analyze"
+ANALYZE_API_URL = f"{os.getenv("API_URL", "http://localhost:5000")}/analyze"
 # ANALYZE_API_URL = "http://localhost:5000/analyze"
 
 # -------------------------------
