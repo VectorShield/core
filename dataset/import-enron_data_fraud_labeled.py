@@ -20,6 +20,47 @@ data = pd.read_csv(csv_file_path)
 print("Dataset loaded successfully!")
 
 # -------------------------------
+# ⚙️ Reorder the Dataset (2 ham : 1 spam)
+# -------------------------------
+spam_data = data[data["Label"] == 1]
+ham_data = data[data["Label"] == 0]
+
+spam_idx = 0
+ham_idx = 0
+spam_count = len(spam_data)
+ham_count = len(ham_data)
+
+combined_rows = []
+
+# Interleave 2 ham + 1 spam until one category is exhausted
+while spam_idx < spam_count and ham_idx < ham_count:
+    # Take up to 2 ham (if available)
+    combined_rows.append(ham_data.iloc[ham_idx])
+    ham_idx += 1
+    if ham_idx < ham_count:
+        combined_rows.append(ham_data.iloc[ham_idx])
+        ham_idx += 1
+
+    # Take 1 spam (if available)
+    if spam_idx < spam_count:
+        combined_rows.append(spam_data.iloc[spam_idx])
+        spam_idx += 1
+
+# If any ham remains, add them
+while ham_idx < ham_count:
+    combined_rows.append(ham_data.iloc[ham_idx])
+    ham_idx += 1
+
+# If any spam remains, add them
+while spam_idx < spam_count:
+    combined_rows.append(spam_data.iloc[spam_idx])
+    spam_idx += 1
+
+# Build a new DataFrame in the desired 2:1 ratio order
+combined_df = pd.DataFrame(combined_rows, columns=data.columns)
+print("First 30 reordered rows:\n", combined_df.head(30)["Label"])
+
+# -------------------------------
 # 📌 Helper Functions
 # -------------------------------
 def get_email_type(label):
@@ -47,15 +88,13 @@ def update_progress_if_higher(index):
 # 🏭 Worker Function
 # -------------------------------
 def process_row(df_index, row, insert_api_url):
-    """
-    Submits a single row to the /insert endpoint.
-    Returns (df_index, success_bool).
-    """
     try:
         email_body = row["Body"]
         email_subject = row["Subject"] if pd.notna(row["Subject"]) else "No Subject"
         email_sender = row["From"] if pd.notna(row["From"]) else "unknown@enron.com"
         email_type = get_email_type(row["Label"])
+
+        # print(f"DEBUG: Submitting row {df_index}, label={email_type}, subject='{email_subject}'")
 
         payload = {
             "subject": email_subject,
@@ -80,12 +119,13 @@ def process_row(df_index, row, insert_api_url):
 # -------------------------------
 insert_api_url = "http://localhost:5000/insert"
 start_index = global_progress
-print(f"Resuming from row {start_index}...")
+total_rows = len(combined_df)
+print(f"Total re-ordered rows: {total_rows}")
+print(f"Resuming from re-ordered row index {start_index}...")
 
-total_rows = len(data)
-rows_to_process = data.iloc[start_index:].iterrows()
+rows_to_process = combined_df.iloc[start_index:].iterrows()
 
-with ThreadPoolExecutor(max_workers=4) as executor, \
+with ThreadPoolExecutor(max_workers=1) as executor, \
      tqdm(total=(total_rows - start_index), desc="Inserting", unit="rows") as pbar:
 
     futures_map = {}
@@ -96,6 +136,7 @@ with ThreadPoolExecutor(max_workers=4) as executor, \
     for future in as_completed(futures_map):
         df_index, success = future.result()
         if success:
+            # increment the progress index
             update_progress_if_higher(df_index + 1)
         pbar.update(1)
         pbar.refresh()

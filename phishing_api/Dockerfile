@@ -4,12 +4,23 @@ FROM python:3.12-slim AS model-downloader
 WORKDIR /model
 
 # Install only the necessary package for downloading the model
-RUN pip install --no-cache-dir sentence-transformers
+RUN pip install --no-cache-dir sentence-transformers==3.4.1 protobuf==5.29.3 transformers==4.48.3 sentencepiece
 
 # Download and save the model
 RUN python -c "from sentence_transformers import SentenceTransformer; \
     model = SentenceTransformer('all-MiniLM-L6-v2'); \
     model.save('/model/all-MiniLM-L6-v2')"
+
+RUN python -c "from sentence_transformers import SentenceTransformer; \
+    model = SentenceTransformer('Intel/dynamic_tinybert'); \
+    model.save('/model/dynamic_tinybert')"
+
+RUN python -c "from sentence_transformers import SentenceTransformer; \
+    from transformers import AutoModel, AutoTokenizer, DebertaV2Tokenizer; \
+    tokenizer = DebertaV2Tokenizer.from_pretrained('microsoft/deberta-v3-base'); \
+    model = AutoModel.from_pretrained('microsoft/deberta-v3-base'); \
+    model.save_pretrained('/model/deberta-v3-base'); \
+    tokenizer.save_pretrained('/model/deberta-v3-base')"
 
 # 🔹 Stage 2: Build Final Application Image
 FROM python:3.12-slim
@@ -23,7 +34,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # 🔹 Copy the downloaded model from the previous stage
-COPY --from=model-downloader /model/all-MiniLM-L6-v2 models/all-MiniLM-L6-v2
+COPY --from=model-downloader /model models
 
 # Copy the rest of the application
 COPY . .

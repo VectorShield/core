@@ -1,9 +1,10 @@
 import os
-import pandas as pd
-import requests
-import base64
+import re
 import time
-from tqdm import tqdm  # <--- ADD THIS for progress bar
+import base64
+import requests
+import pandas as pd
+from tqdm import tqdm
 
 # -------------------------------
 # 📁 Setup File Paths
@@ -31,7 +32,7 @@ def get_email_type(label):
 # 🚀 Test Script Configuration
 # -------------------------------
 analyze_api_url = "http://localhost:5000/analyze"
-sample_size = 100  # Total number of random entries to test
+sample_size = 200  # Total number of random entries to test
 
 # -------------------------------
 # 🎯 Prepare Sample Data
@@ -74,8 +75,11 @@ high_confidence = 0
 medium_confidence = 0
 low_confidence = 0
 
+phish_sims = []
+legit_sims = []
+
 # -------------------------------
-# 🔍 Validate Each Email (with progress bar + ETA)
+# 🔍 Validate Each Email
 # -------------------------------
 for index, row in tqdm(sample_data.iterrows(), total=len(sample_data), desc="Analyzing", unit="emails"):
     try:
@@ -90,11 +94,7 @@ for index, row in tqdm(sample_data.iterrows(), total=len(sample_data), desc="Ana
         else:
             ham_count += 1
 
-        if not email_body_raw.strip():
-            pass
-
         encoded_body = base64.b64encode(email_body_raw.encode("utf-8")).decode("utf-8")
-
         payload = {
             "subject": email_subject,
             "body": encoded_body,
@@ -123,6 +123,18 @@ for index, row in tqdm(sample_data.iterrows(), total=len(sample_data), desc="Ana
                 false_positives += 1
             elif predicted_type == "legitimate" and expected_type == "phishing":
                 false_negatives += 1
+
+            # Parse "PhishSim=..., LegitSim=..." from reasons (if present)
+            reasons_list = response_data.get("reasons", [])
+            for reason in reasons_list:
+                # Example reason: "PhishSim=0.34, LegitSim=0.02"
+                match = re.search(r"PhishSim=([\d.]+).+LegitSim=([\d.]+)", reason)
+                if match:
+                    ph_val = float(match.group(1))
+                    lg_val = float(match.group(2))
+                    phish_sims.append(ph_val)
+                    legit_sims.append(lg_val)
+
         else:
             print(f"❌ Error analyzing row {index}: status {response.status_code} - {response.text}")
 
@@ -156,3 +168,14 @@ else:
     print(f"High Confidence: {high_confidence} ({high_confidence_rate:.2f}%)")
     print(f"Medium Confidence: {medium_confidence} ({medium_confidence_rate:.2f}%)")
     print(f"Low Confidence: {low_confidence} ({low_confidence_rate:.2f}%)")
+
+    # Additional stats about the "PhishSim" vs. "LegitSim" values
+    if phish_sims and legit_sims:
+        avg_phish = sum(phish_sims) / len(phish_sims)
+        avg_legit = sum(legit_sims) / len(legit_sims)
+        print("\n🔎 Similarity Statistics (from reasons):")
+        print(f"Average PhishSim: {avg_phish:.3f}")
+        print(f"Average LegitSim: {avg_legit:.3f}")
+        print(f"Data points counted: {len(phish_sims)}")
+    else:
+        print("\n🔎 No PhishSim/LegitSim data found in reasons.")

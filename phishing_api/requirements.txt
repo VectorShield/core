@@ -10,7 +10,6 @@ grpcio==1.70.0
 grpcio-tools==1.70.0
 h11==0.14.0
 httpx==0.28.1
-huggingface-hub==0.28.1
 idna==3.10
 Jinja2==3.1.5
 joblib==1.4.2
@@ -41,3 +40,4 @@ uvicorn==0.34.0
 sentencepiece==0.2.0
 pytest-asyncio==0.25.3
 sentry-sdk==2.22.0
+python-multipart==0.0.20

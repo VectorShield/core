@@ -32,7 +32,7 @@ async def analyze_email(email: EmailRequest):
             conf = "Low"
 
         logger.info(
-            f"✅ Analyzed -> score={phishing_score}, conf={conf}, label={closest_label}"
+            f"✅ Analyzed -> score={phishing_score}, conf={conf}, label={closest_label}, {reasons=}"
         )
 
         # 4) Return an AnalyzeResponse

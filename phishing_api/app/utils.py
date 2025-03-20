@@ -52,7 +52,7 @@ async def extract_email_features(email: EmailRequest):
     body_str = decoded_body_bytes.decode(errors="replace")
 
     # Only store a short snippet in Qdrant
-    body_preview = body_str[:200]
+    body_preview = body_str[:2000]
 
     subject = email.subject or ""
     sender = email.sender or "unknown@domain"

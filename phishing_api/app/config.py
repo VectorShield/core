@@ -19,11 +19,24 @@ COLLECTION_NAME = "emails"
 # MODEL_NAME = os.getenv("MODEL_NAME", "microsoft/deberta-v3-base")
 # MODEL_DIMENSION = int(os.getenv("MODEL_DIMENSION", "768"))
 # MODEL_NAME = "microsoft/deberta-v3-base"  # Or "distilbert-base-uncased"
+# 📊 Test Summary:
+# Total Emails Tested: 570
+# Correct Classifications: 468 (82.11%)
+# False Positives: 0 (0.00%)
+# False Negatives: 102 (17.89%)
 
+# 🔍 Confidence Level Breakdown:
+# High Confidence: 30 (5.26%)
+# Medium Confidence: 13 (2.28%)
+# Low Confidence: 527 (92.46%)
 
-MODEL_NAME = os.getenv("MODEL_NAME", "microsoft/all-MiniLM-L6-v2")
-MODEL_PATH = os.getenv("MODEL_PATH", "models/all-MiniLM-L6-v2")
-MODEL_DIMENSION = int(os.getenv("MODEL_DIMENSION", "384"))
+# 🔎 Similarity Statistics:
+# Avg PhishSim: 8.538
+# Avg LegitSim: 41.449
+
+# MODEL_NAME = os.getenv("MODEL_NAME", "microsoft/all-MiniLM-L6-v2")
+# MODEL_PATH = os.getenv("MODEL_PATH", "models/all-MiniLM-L6-v2")
+# MODEL_DIMENSION = int(os.getenv("MODEL_DIMENSION", "384"))
 # Total Emails Tested: 1865
 # Total Spam Emails Tested: 465
 # Total Ham Emails Tested: 1400
@@ -37,16 +50,23 @@ MODEL_DIMENSION = int(os.getenv("MODEL_DIMENSION", "384"))
 # Low Confidence: 1796 (96.30%
 
 
-# MODEL_NAME = os.getenv("MODEL_NAME", "Intel/dynamic_tinybert")
-# MODEL_PATH = os.getenv("MODEL_PATH", "models/dynamic_tinybert")
-# MODEL_DIMENSION = int(os.getenv("MODEL_DIMENSION", "768"))
-# Total Emails Tested: 1865
-# Total Spam Emails Tested: 465
-# Total Ham Emails Tested: 1400
-# Correct Classifications: 1418
+MODEL_NAME = os.getenv("MODEL_NAME", "Intel/dynamic_tinybert")
+MODEL_PATH = os.getenv("MODEL_PATH", "models/dynamic_tinybert")
+MODEL_DIMENSION = int(os.getenv("MODEL_DIMENSION", "768"))
+# 📊 Test Summary:
+# Total Emails Tested: 570
+# Correct Classifications: 444 (77.89%)
 # False Positives: 0 (0.00%)
-# False Negatives: 447 (23.97%)
-# Overall Accuracy: 76.03%
+# False Negatives: 126 (22.11%)
+
+# 🔍 Confidence Level Breakdown:
+# High Confidence: 3 (0.53%)
+# Medium Confidence: 24 (4.21%)
+# Low Confidence: 543 (95.26%)
+
+# 🔎 Similarity Statistics:
+# Avg PhishSim: 9.884
+# Avg LegitSim: 39.848
 
 # Batch Upsert
 BATCH_SIZE = 10
