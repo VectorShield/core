@@ -4,6 +4,7 @@ import base64
 import requests
 import pandas as pd
 import re
+import csv
 from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -20,10 +21,8 @@ splits = {
 # -------------------------------
 # ⚙️ API Endpoints
 # -------------------------------
-INSERT_API_URL = f"{os.getenv("API_URL", "http://localhost:5000")}/insert"
-# INSERT_API_URL = "http://localhost:5000/insert"
-ANALYZE_API_URL = f"{os.getenv("API_URL", "http://localhost:5000")}/analyze"
-# ANALYZE_API_URL = "http://localhost:5000/analyze"
+INSERT_API_URL = f"{os.getenv('API_URL', 'http://localhost:5000')}/insert"
+ANALYZE_API_URL = f"{os.getenv('API_URL', 'http://localhost:5000')}/analyze"
 
 # -------------------------------
 # 📦 Load Datasets
@@ -45,15 +44,18 @@ print(f"  - Non-Spam (Ham) Emails: {ham_count}\n")
 # 📌 Helper Functions
 # -------------------------------
 def get_email_type(label):
-    """Convert label to readable email type."""
+    """Convert dataset label (0 or 1) to 'phishing' or 'legitimate'."""
     return "phishing" if label == 1 else "legitimate"
 
 def parse_email_text(text):
-    """Treat the entire text as the body and leave subject empty."""
+    """Treat the entire text as the body; use an empty subject."""
     return "", text.strip()
 
-def process_email(row):
-    """Prepare and send email data to API."""
+def process_email_for_insert(row):
+    """
+    Prepares and sends a single email's data to the /insert endpoint.
+    Returns True if inserted successfully, False otherwise.
+    """
     try:
         subject, body = parse_email_text(row["Text"])
         email_type = get_email_type(row["Spam"])
@@ -66,17 +68,103 @@ def process_email(row):
         }
 
         resp = requests.post(INSERT_API_URL, json=payload)
-        return resp.status_code == 200
+        return (resp.status_code == 200)
     except Exception as e:
-        print(f"❌ Exception processing email: {e}")
+        print(f"❌ Exception inserting email: {e}")
         return False
 
+def analyze_email(row, idx):
+    """
+    Sends the email to /analyze and gathers:
+    - row index (as 'EmailID')
+    - expected_type
+    - predicted_type
+    - confidence_level
+    - phishing_score
+    - PhishSim / LegitSim from reasons
+    - correctness (Correct / FalsePositive / FalseNegative)
+
+    Returns a dict for CSV export & final stats.
+    """
+    subject, body = parse_email_text(row["Text"])
+    expected_type = get_email_type(row["Spam"])
+
+    payload = {
+        "subject": subject,
+        "body": base64.b64encode(body.encode("utf-8")).decode("utf-8"),
+        "sender": "unknown@example.com"
+    }
+
+    try:
+        response = requests.post(ANALYZE_API_URL, json=payload)
+        if response.status_code != 200:
+            return {
+                "EmailID": idx,
+                "ExpectedType": expected_type,
+                "PredictedType": "ERROR",
+                "PhishingScore": None,
+                "Confidence": "ERROR",
+                "PhishSim": None,
+                "LegitSim": None,
+                "Correctness": "AnalyzeFailed",
+            }
+
+        response_data = response.json()
+        phishing_score = response_data.get("phishing_score", 0)
+        confidence_level = response_data.get("confidence_level", "Unknown")
+        reasons = response_data.get("reasons", [])
+
+        # Attempt to parse "PhishSim=xx, LegitSim=yy" from any reason string
+        phish_sim = None
+        legit_sim = None
+        for reason in reasons:
+            match = re.search(r"PhishSim=([\d.]+).*LegitSim=([\d.]+)", reason)
+            if match:
+                phish_sim = float(match.group(1))
+                legit_sim = float(match.group(2))
+                break
+
+        # Decide predicted type
+        predicted_type = "phishing" if phishing_score >= 70 else "legitimate"
+
+        # Determine correctness
+        if predicted_type == expected_type:
+            correctness = "Correct"
+        elif predicted_type == "phishing" and expected_type == "legitimate":
+            correctness = "FalsePositive"
+        else:
+            correctness = "FalseNegative"
+
+        return {
+            "EmailID": idx,
+            "ExpectedType": expected_type,
+            "PredictedType": predicted_type,
+            "PhishingScore": phishing_score,
+            "Confidence": confidence_level,
+            "PhishSim": phish_sim,
+            "LegitSim": legit_sim,
+            "Correctness": correctness
+        }
+    except Exception as e:
+        print(f"❌ Error analyzing email index={idx}: {e}")
+        return {
+            "EmailID": idx,
+            "ExpectedType": expected_type,
+            "PredictedType": "ERROR",
+            "PhishingScore": None,
+            "Confidence": "ERROR",
+            "PhishSim": None,
+            "LegitSim": None,
+            "Correctness": "AnalyzeException"
+        }
+
 # -------------------------------
-# 🚀 Import Emails into API
+# 🚀 Import (Train) Emails into API
 # -------------------------------
 print(f"📤 Importing {len(train_data)} training emails into the API...")
+
 with ThreadPoolExecutor(max_workers=5) as executor, tqdm(total=len(train_data), desc="Importing", unit="emails") as pbar:
-    futures = [executor.submit(process_email, row) for _, row in train_data.iterrows()]
+    futures = [executor.submit(process_email_for_insert, row) for _, row in train_data.iterrows()]
     for future in as_completed(futures):
         if future.result():
             pbar.update(1)
@@ -84,70 +172,39 @@ with ThreadPoolExecutor(max_workers=5) as executor, tqdm(total=len(train_data), 
 print("\n✅ Training data import completed!")
 
 # -------------------------------
-# 🛠️ Test the API
+# 🛠️ Test (Analyze) the API
 # -------------------------------
 print(f"\n🔍 Testing {len(test_data)} emails...")
 time.sleep(3)
 
-# 🔍 Initialize Metrics
-total_tested = 0
-correct_classifications = 0
-false_positives = 0
-false_negatives = 0
-high_confidence = 0
-medium_confidence = 0
-low_confidence = 0
-phish_sims = []
-legit_sims = []
-
-for _, row in tqdm(test_data.iterrows(), total=len(test_data), desc="Testing", unit="emails"):
-    try:
-        subject, body = parse_email_text(row["Text"])
-        expected_type = get_email_type(row["Spam"])
-
-        payload = {
-            "subject": subject,  # Always empty
-            "body": base64.b64encode(body.encode("utf-8")).decode("utf-8"),
-            "sender": "unknown@example.com"
-        }
-
-        response = requests.post(ANALYZE_API_URL, json=payload)
-        response_data = response.json()
-
-        if response.status_code == 200:
-            total_tested += 1
-            confidence_level = response_data.get("confidence_level", "Unknown")
-            phishing_score = response_data.get("phishing_score", 0)
-            predicted_type = "phishing" if phishing_score >= 70 else "legitimate"
-
-            if confidence_level == "High":
-                high_confidence += 1
-            elif confidence_level == "Medium":
-                medium_confidence += 1
-            elif confidence_level == "Low":
-                low_confidence += 1
-
-            if predicted_type == expected_type:
-                correct_classifications += 1
-            elif predicted_type == "phishing" and expected_type == "legitimate":
-                false_positives += 1
-            elif predicted_type == "legitimate" and expected_type == "phishing":
-                false_negatives += 1
-
-            # Extract similarity scores
-            reasons = response_data.get("reasons", [])
-            for reason in reasons:
-                match = re.search(r"PhishSim=([\d.]+).+LegitSim=([\d.]+)", reason)
-                if match:
-                    phish_sims.append(float(match.group(1)))
-                    legit_sims.append(float(match.group(2)))
-
-    except Exception as e:
-        print(f"❌ Error analyzing email: {e}")
+analysis_rows = []
+with tqdm(total=len(test_data), desc="Testing", unit="emails") as pbar:
+    for idx, row in test_data.iterrows():
+        result = analyze_email(row, idx)
+        analysis_rows.append(result)
+        pbar.update(1)
 
 # -------------------------------
-# 📊 Generate Final Report
+# 📊 Summarize & Write CSV
 # -------------------------------
+# Filter out any rows that had "AnalyzeFailed" or "AnalyzeException" if desired
+tested_rows = [r for r in analysis_rows if r["Correctness"] not in ("AnalyzeFailed", "AnalyzeException", "ERROR")]
+
+total_tested = len(tested_rows)
+correct_classifications = sum(1 for r in tested_rows if r["Correctness"] == "Correct")
+false_positives = sum(1 for r in tested_rows if r["Correctness"] == "FalsePositive")
+false_negatives = sum(1 for r in tested_rows if r["Correctness"] == "FalseNegative")
+
+# Confidence counts
+high_confidence = sum(1 for r in tested_rows if r["Confidence"] == "High")
+medium_confidence = sum(1 for r in tested_rows if r["Confidence"] == "Medium")
+low_confidence = sum(1 for r in tested_rows if r["Confidence"] == "Low")
+
+# Similarity scores
+phish_sims = [r["PhishSim"] for r in tested_rows if r["PhishSim"] is not None]
+legit_sims = [r["LegitSim"] for r in tested_rows if r["LegitSim"] is not None]
+
+# Calculate final metrics
 if total_tested > 0:
     accuracy = (correct_classifications / total_tested) * 100
     false_positive_rate = (false_positives / total_tested) * 100
@@ -174,6 +231,28 @@ if total_tested > 0:
         print(f"Avg PhishSim: {avg_phish:.3f}")
         print(f"Avg LegitSim: {avg_legit:.3f}")
 else:
-    print("\n❌ No emails were tested. Check dataset or API.")
+    print("\n❌ No emails were tested or all failed analysis. Check dataset or API.")
 
+# -------------------------------
+# 📄 Write Detailed CSV
+# -------------------------------
+output_csv = "huggingface_test_results.csv"
+fieldnames = [
+    "EmailID",
+    "ExpectedType",
+    "PredictedType",
+    "PhishingScore",
+    "Confidence",
+    "PhishSim",
+    "LegitSim",
+    "Correctness"
+]
+
+with open(output_csv, mode="w", newline="", encoding="utf-8") as f:
+    writer = csv.DictWriter(f, fieldnames=fieldnames)
+    writer.writeheader()
+    for row in analysis_rows:
+        writer.writerow(row)
+
+print(f"\n✅ CSV results written to {output_csv}")
 print("\n✅ Script Execution Completed!")
