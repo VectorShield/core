@@ -27,14 +27,14 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
+# 🔹 Copy the downloaded model from the previous stage
+COPY --from=model-downloader /model models
+
 # Copy only requirements first (for caching)
 COPY app/requirements.txt .
 
 # Install dependencies (without cache for smaller image)
 RUN pip install --no-cache-dir -r requirements.txt
-
-# 🔹 Copy the downloaded model from the previous stage
-COPY --from=model-downloader /model models
 
 # Copy the rest of the application
 COPY app/ .
