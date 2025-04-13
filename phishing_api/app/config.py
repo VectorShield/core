@@ -14,6 +14,7 @@ API_VERSION = "1.0.0"
 #QDRANT_URL = os.getenv("QDRANT_URL", "http://192.168.117.177:6333")
 QDRANT_URL = os.getenv("QDRANT_URL", "http://192.168.1.167:6333")
 COLLECTION_NAME = "emails"
+BAD_PROB_THRESHOLD = float(os.getenv("BAD_PROB_THRESHOLD", "0.6"))
 
 # model
 # MODEL_PATH = os.getenv("MODEL_PATH", "models/deberta-v3-base")

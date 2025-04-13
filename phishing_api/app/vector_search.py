@@ -9,7 +9,7 @@ from qdrant_client.http.models import Filter, FieldCondition, MatchValue, PointS
 from .database import client
 from .models import EmailRequest
 from .utils import extract_email_features
-from .config import COLLECTION_NAME, MODEL_PATH, MODEL_NAME
+from .config import COLLECTION_NAME, MODEL_PATH, MODEL_NAME, BAD_PROB_THRESHOLD
 from .logging_config import setup_logging
 
 # Initialize Logger
@@ -178,7 +178,7 @@ async def check_email_similarity(email_feats: dict):
         # Compute "bad" probability
         bad_prob = sum_bad_sim / (sum_bad_sim + sum_good_sim + 1e-7)
         bad_score = int(round(bad_prob * 100))
-        closest_label = "bad" if bad_prob >= 0.5 else "good"
+        closest_label = "bad" if bad_prob >= BAD_PROB_THRESHOLD else "good"
 
         reasons = [
             f"sum_good_sim={sum_good_sim:.3f}",
