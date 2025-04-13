@@ -8,7 +8,7 @@ RUN pip install --no-cache-dir sentence-transformers==3.4.1 protobuf==5.29.3 tra
 
 # Download and save the model
 RUN python -c "from sentence_transformers import SentenceTransformer; \
-    model = SentenceTransformer('all-MiniLM-L6-v2'); \
+    model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2'); \
     model.save('/model/all-MiniLM-L6-v2')"
 
 RUN python -c "from sentence_transformers import SentenceTransformer; \

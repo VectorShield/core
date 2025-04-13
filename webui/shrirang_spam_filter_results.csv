@@ -38,7 +38,7 @@ EmailID,ExpectedType,PredictedType,PhishingScore,Confidence,PhishSim,LegitSim,Co
 1619,business,legitimate,36,Low,,,FalseNegative
 5127,business,legitimate,25,Low,,,FalseNegative
 5120,spam,phishing,90,High,,,FalseNegative
-3108,spam,legitimate,13,Low,,,FalseNegative
+3108,spam,legitimate,12,Low,,,FalseNegative
 3973,business,legitimate,0,Low,,,FalseNegative
 4902,business,legitimate,0,Low,,,FalseNegative
 4442,business,legitimate,0,Low,,,FalseNegative
@@ -76,7 +76,7 @@ EmailID,ExpectedType,PredictedType,PhishingScore,Confidence,PhishSim,LegitSim,Co
 2009,spam,phishing,83,High,,,FalseNegative
 4347,business,legitimate,0,Low,,,FalseNegative
 1692,business,legitimate,0,Low,,,FalseNegative
-2685,spam,phishing,82,High,,,FalseNegative
+2685,spam,phishing,84,High,,,FalseNegative
 615,spam,legitimate,51,Low,,,FalseNegative
 4363,business,legitimate,0,Low,,,FalseNegative
 1950,business,legitimate,0,Low,,,FalseNegative
@@ -160,7 +160,7 @@ EmailID,ExpectedType,PredictedType,PhishingScore,Confidence,PhishSim,LegitSim,Co
 4478,business,legitimate,0,Low,,,FalseNegative
 4282,business,legitimate,5,Low,,,FalseNegative
 4545,business,legitimate,0,Low,,,FalseNegative
-2135,spam,legitimate,63,Medium,,,FalseNegative
+2135,spam,legitimate,65,Medium,,,FalseNegative
 1878,business,legitimate,0,Low,,,FalseNegative
 1007,spam,phishing,100,High,,,FalseNegative
 2350,spam,phishing,100,High,,,FalseNegative

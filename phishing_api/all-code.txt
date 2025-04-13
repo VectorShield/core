@@ -311,6 +311,7 @@ API_VERSION = "1.0.0"
 #QDRANT_URL = os.getenv("QDRANT_URL", "http://192.168.117.177:6333")
 QDRANT_URL = os.getenv("QDRANT_URL", "http://192.168.1.167:6333")
 COLLECTION_NAME = "emails"
+BAD_PROB_THRESHOLD = float(os.getenv("BAD_PROB_THRESHOLD", "0.6"))
 
 # model
 # MODEL_PATH = os.getenv("MODEL_PATH", "models/deberta-v3-base")
@@ -492,7 +493,7 @@ async def parse_raw_eml(eml_bytes: bytes):
     # If we detect an obviously invalid EML or "junk" content, raise an error.
     # For instance, say we want to ensure the sender is not "Unknown Sender" 
     # AND the body has at least some non-whitespace text:
-    if sender == "Unknown Sender" and not body_str.strip():
+    if sender == "Unknown Sender":
         raise ValueError("Invalid EML content – missing sender and body text.")
 
     return {
@@ -515,7 +516,7 @@ from qdrant_client.http.models import Filter, FieldCondition, MatchValue, PointS
 from .database import client
 from .models import EmailRequest
 from .utils import extract_email_features
-from .config import COLLECTION_NAME, MODEL_PATH, MODEL_NAME
+from .config import COLLECTION_NAME, MODEL_PATH, MODEL_NAME, BAD_PROB_THRESHOLD
 from .logging_config import setup_logging
 
 # Initialize Logger
@@ -684,7 +685,7 @@ async def check_email_similarity(email_feats: dict):
         # Compute "bad" probability
         bad_prob = sum_bad_sim / (sum_bad_sim + sum_good_sim + 1e-7)
         bad_score = int(round(bad_prob * 100))
-        closest_label = "bad" if bad_prob >= 0.5 else "good"
+        closest_label = "bad" if bad_prob >= BAD_PROB_THRESHOLD else "good"
 
         reasons = [
             f"sum_good_sim={sum_good_sim:.3f}",
@@ -799,12 +800,10 @@ async def init_batch_upsert():
 
 
 ./app/main.py
-import logging
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-import sentry_sdk
-
+from contextlib import asynccontextmanager
 from .logging_config import setup_logging
+from fastapi.middleware.cors import CORSMiddleware
 from .config import API_TITLE, API_VERSION
 from .routes.metrics import PrometheusMiddleware, metrics_router
 from .routes.insert import insert_router
@@ -813,30 +812,36 @@ from .routes.analyze import analyze_router
 from .routes.report import report_router
 from .routes.parse_eml import parse_eml_router
 from .batch_upsert import init_batch_upsert
-
-# Configure logging on startup
-setup_logging()
+import logging
+import sentry_sdk
 
 logger = logging.getLogger("phishing_api")
 
-sentry_sdk.init(
-    dsn="https://62070df56536d744deb5335983041800@o507054.ingest.us.sentry.io/4508866643099648",
-    # Add data like request headers and IP for users,
-    # see https://docs.sentry.io/platforms/python/data-management/data-collected/ for more info
-    send_default_pii=True,
-    # Set traces_sample_rate to 1.0 to capture 100%
-    # of transactions for tracing.
-    traces_sample_rate=None,
-    # _experiments={
-    #     # Set continuous_profiling_auto_start to True
-    #     # to automatically start the profiler on when
-    #     # possible.
-    #     "continuous_profiling_auto_start": True,
-    # },
-)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Runs *before* the server starts (like the old on_event("startup")) 
+    and *after* the server stops, if needed.
+    """
+    # BEFORE serving:
+    setup_logging()
+    sentry_sdk.init(
+        dsn="https://62070df56536d744deb5335983041800@o507054.ingest.us.sentry.io/4508866643099648",
+        send_default_pii=True,
+        traces_sample_rate=None,
+    )
 
-# Create FastAPI application
-app = FastAPI(title=API_TITLE, version=API_VERSION)
+    logger.info("Starting up... ensuring Qdrant collection and init batch upsert.")
+    await ensure_collection_exists()
+    await init_batch_upsert()
+
+    yield  # <-- The application is now running
+
+    # AFTER serving (optional shutdown logic goes here)
+    logger.info("Shutting down... (optional teardown)")
+
+# Now pass `lifespan=lifespan` to the app:
+app = FastAPI(title=API_TITLE, version=API_VERSION, lifespan=lifespan)
 
 # CORS middleware
 app.add_middleware(
@@ -847,10 +852,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Prometheus middleware
+# Then do your normal setup
 app.add_middleware(PrometheusMiddleware)
 
-# Include route modules
 app.include_router(metrics_router)
 app.include_router(insert_router)
 app.include_router(analyze_router)
@@ -859,12 +863,13 @@ app.include_router(parse_eml_router)
 
 logger.info("API started")
 
+
 # Initialize background batch upsert
-@app.on_event("startup")
-async def startup_event():
-    # FIRST: Make sure the collection exists
-    await ensure_collection_exists()
-    await init_batch_upsert()  # Ensure async function is awaited
+#@app.on_event("startup")
+#async def startup_event():
+#    # FIRST: Make sure the collection exists
+#    await ensure_collection_exists()
+#    await init_batch_upsert()  # Ensure async function is awaited
 
 ### start ! note that the start can take a while
 # uvicorn app.main:app --host 0.0.0.0 --port 5000

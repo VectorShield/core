@@ -4,6 +4,7 @@ import os
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from fastapi.templating import Jinja2Templates
 
 # If your main API is at a different URL/port, set it here:
@@ -24,6 +25,13 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # Set up templates directory
 templates = Jinja2Templates(directory="templates")
+
+# Mount your static directory if not already done
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon():
+    return FileResponse("static/favicon.ico")
 
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request):

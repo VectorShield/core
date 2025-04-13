@@ -113,7 +113,6 @@ def analyze_file(eml_data: dict, expected_type: str, filename: str):
     predicted_type = "spam" if phishing_score >= 70 else "business"
 
 
-
     # Determine misclassification type
     if predicted_type == expected_type:
         misclass_type = "Correct"
