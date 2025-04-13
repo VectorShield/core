@@ -44,8 +44,8 @@ print(f"  - Non-Spam (Ham) Emails: {ham_count}\n")
 # 📌 Helper Functions
 # -------------------------------
 def get_email_type(label):
-    """Convert dataset label (0 or 1) to 'phishing' or 'legitimate'."""
-    return "phishing" if label == 1 else "legitimate"
+    return "spam" if label == 1 else "business"
+
 
 def parse_email_text(text):
     """Treat the entire text as the body; use an empty subject."""
@@ -125,7 +125,7 @@ def analyze_email(row, idx):
                 break
 
         # Decide predicted type
-        predicted_type = "phishing" if phishing_score >= 70 else "legitimate"
+        predicted_type = "spam" if phishing_score >= 70 else "business"
 
         # Determine correctness
         if predicted_type == expected_type:

@@ -1,0 +1,1134 @@
+./tests/test_parse_eml.py
+# ./tests/test_parse_eml.py
+
+import pytest
+import base64
+from fastapi.testclient import TestClient
+from app.main import app
+
+client = TestClient(app)
+
+def test_parse_eml_valid_text():
+    """
+    Upload a valid plain-text EML file to /parse_eml and verify the response.
+    """
+    # Create a minimal EML with plain text
+    eml_content = (
+        "From: test@example.com\n"
+        "Subject: Plain Text Test\n"
+        "Content-Type: text/plain\n\n"
+        "This is a test email."
+    ).encode("utf-8")
+
+    files = {
+        "file": ("test.eml", eml_content, "message/rfc822")
+    }
+
+    response = client.post("/parse_eml", files=files)
+    assert response.status_code == 200, f"Unexpected status code: {response.status_code}"
+
+    data = response.json()
+    assert "email" in data, "Response JSON must contain 'email' key"
+    assert data["message"] == "Parsed EML"
+
+    email_obj = data["email"]
+    assert email_obj["subject"] == "Plain Text Test"
+    assert email_obj["sender"] == "test@example.com"
+
+    # Decode the body
+    decoded_body = base64.b64decode(email_obj["body"]).decode("utf-8")
+    assert decoded_body.strip() == "This is a test email."
+
+def test_parse_eml_valid_html():
+    """
+    Upload a valid HTML EML file to /parse_eml and verify the response.
+    """
+    eml_content = (
+        "From: test@example.com\n"
+        "Subject: HTML Test\n"
+        "Content-Type: text/html\n\n"
+        "<html><body><h1>Hello World</h1></body></html>"
+    ).encode("utf-8")
+
+    files = {
+        "file": ("test.eml", eml_content, "message/rfc822")
+    }
+
+    response = client.post("/parse_eml", files=files)
+    assert response.status_code == 200, f"Unexpected status code: {response.status_code}"
+
+    data = response.json()
+    assert "email" in data
+    assert data["message"] == "Parsed EML"
+
+    email_obj = data["email"]
+    assert email_obj["subject"] == "HTML Test"
+    assert email_obj["sender"] == "test@example.com"
+
+    decoded_body = base64.b64decode(email_obj["body"]).decode("utf-8")
+    assert decoded_body.strip() == "<html><body><h1>Hello World</h1></body></html>"
+
+def test_parse_eml_missing_file():
+    """
+    Attempt to call /parse_eml without actually uploading any file.
+    Expect a 422 error (Unprocessable Entity) from FastAPI.
+    """
+    response = client.post("/parse_eml", files={})
+    # Because the endpoint requires a file, this usually triggers a 422.
+    assert response.status_code == 422, f"Expected 422, got {response.status_code}"
+
+def test_parse_eml_invalid_file():
+    """
+    Provide an invalid (non-EML) file content to /parse_eml and expect a 400 from our code.
+    """
+    # The route tries to parse the EML content. If it fails, it raises HTTP 400.
+    files = {
+        "file": ("fake.txt", b"Not a valid EML content", "text/plain")
+    }
+
+    response = client.post("/parse_eml", files=files)
+    # Our route logic returns 400 if the parse fails
+    assert response.status_code == 400, f"Expected 400, got {response.status_code}"
+
+    data = response.json()
+    assert "Failed to parse EML" in data["detail"], "Must mention parse failure in the detail"
+
+
+./tests/test_utils.py
+import pytest
+import base64
+import asyncio
+from email.message import EmailMessage
+from bs4 import BeautifulSoup
+from unittest.mock import MagicMock
+
+from app.utils import (
+    extract_urls,
+    extract_eml_body,
+    extract_email_features,
+    parse_raw_eml
+)
+from app.models import EmailRequest
+
+
+def test_extract_urls():
+    text = "Visit https://example.com and http://test.com for more info."
+    urls = extract_urls(text)
+    assert urls == ["https://example.com", "http://test.com"]
+
+
+@pytest.mark.asyncio
+async def test_extract_eml_body_text():
+    msg = EmailMessage()
+    msg.set_content("This is a plain text email.")
+    result = await extract_eml_body(msg)
+    assert result == "This is a plain text email.\n"
+
+
+@pytest.mark.asyncio
+async def test_extract_eml_body_html():
+    msg = EmailMessage()
+    msg.add_alternative("<html><body><p>Hello, world!</p></body></html>", subtype="html")
+    result = await extract_eml_body(msg)
+    # The trailing "\n" depends on how the HTML is parsed. 
+    # Usually, BeautifulSoup's get_text() appends a newline at the end.
+    assert result.strip() == "Hello, world!"
+
+
+@pytest.mark.asyncio
+async def test_extract_email_features():
+    # Prepare a small HTML body with a link
+    encoded_body = base64.b64encode(
+        b"<html><a href='https://example.com'>Click here</a></html>"
+    ).decode()
+
+    email_mock = EmailRequest(
+        subject="Test Subject",
+        body=encoded_body,
+        sender="sender@example.com",
+        reply_to="reply@example.com",
+        customerId="12345",
+        attachments=[]
+    )
+
+    features = await extract_email_features(email_mock)
+
+    assert features["subject"] == "Test Subject"
+
+    # Confirm the body_preview
+    assert features["body_preview"] == "<html><a href='https://example.com'>Click here</a></html>"[:200]
+
+    # Check that the link is extracted
+    assert "https://example.com" in features["links"]
+
+    # Check that domains are extracted
+    assert features["sender_domain"] == "example.com"
+    assert features["reply_to_domain"] == "example.com"
+
+    # Check that we have a valid email_hash
+    assert "email_hash" in features
+    assert len(features["email_hash"]) == 64  # typical length of a SHA-256 hex
+
+    # Check customerId
+    assert features["customerId"] == "12345"
+
+    # Ensure _full_body_for_embedding is present but in-memory only
+    assert "_full_body_for_embedding" in features
+
+
+@pytest.mark.asyncio
+async def test_parse_raw_eml():
+    raw_email = """From: sender@example.com
+Subject: Test Email
+Content-Type: text/plain
+
+This is a test email."""
+    eml_bytes = raw_email.encode()
+
+    parsed_email = await parse_raw_eml(eml_bytes)
+    assert parsed_email["subject"] == "Test Email"
+    assert parsed_email["sender"] == "sender@example.com"
+
+    decoded_body = base64.b64decode(parsed_email["body"]).decode("utf-8")
+    assert decoded_body.strip() == "This is a test email."
+
+
+@pytest.mark.asyncio
+async def test_parse_raw_eml_html():
+    raw_email = """From: sender@example.com
+Subject: Test Email
+Content-Type: text/html
+
+<html><body><p>This is a test email.</p></body></html>
+"""
+    eml_bytes = raw_email.encode()
+    parsed_email = await parse_raw_eml(eml_bytes)
+
+    assert parsed_email["subject"] == "Test Email"
+    assert parsed_email["sender"] == "sender@example.com"
+
+    decoded_body = base64.b64decode(parsed_email["body"]).decode("utf-8")
+    # The trailing newline can appear depending on how the HTML is parsed
+    assert decoded_body.strip() == "<html><body><p>This is a test email.</p></body></html>"
+
+
+./tests/test_analyze.py
+def test_analyze():
+    # Example test placeholder
+    assert True
+
+
+./tests/__init__.py
+# This file can be empty or contain test-wide fixtures/config.
+
+
+./tests/test_report.py
+def test_report():
+    # Example test placeholder
+    assert True
+
+
+./tests/test_insert.py
+def test_insert():
+    # Example test placeholder
+    assert True
+
+
+./app/database.py
+# database.py
+import logging
+from qdrant_client import AsyncQdrantClient
+from qdrant_client.http.exceptions import UnexpectedResponse
+from qdrant_client.http.models import VectorParams, Distance
+
+from .config import QDRANT_URL, COLLECTION_NAME, MODEL_DIMENSION
+
+logger = logging.getLogger("phishing_api")
+
+# Initialize Qdrant client
+client = AsyncQdrantClient(QDRANT_URL)
+
+async def ensure_collection_exists():
+    """
+    Ensures the Qdrant collection is created before use.
+    Call this once at startup BEFORE upserting anything.
+    """
+    try:
+        await client.get_collection(collection_name=COLLECTION_NAME)
+        logger.info(f"✅ Collection '{COLLECTION_NAME}' already exists. Skipping creation.")
+    except UnexpectedResponse as e:
+        if "Collection" in str(e) and "doesn" in str(e):
+            logger.info(f"⚠️ Collection '{COLLECTION_NAME}' does not exist. Creating it now...")
+            await client.create_collection(
+                collection_name=COLLECTION_NAME,
+                vectors_config=VectorParams(size=MODEL_DIMENSION, distance=Distance.COSINE),
+            )
+            logger.info(f"✅ Collection '{COLLECTION_NAME}' created.")
+        else:
+            raise
+
+
+./app/logging_config.py
+import logging
+from .config import LOG_LEVEL, LOG_FORMAT
+
+def setup_logging():
+    """
+    Configures the logging for the entire application.
+    """
+    logging.basicConfig(level=LOG_LEVEL, format=LOG_FORMAT)
+    logger = logging.getLogger("phishing_api")
+    logger.setLevel(logging.INFO)
+
+    # Duplicate to uvicorn logs if needed
+    uvicorn_logger = logging.getLogger("uvicorn")
+    uvicorn_logger.handlers = logger.handlers
+    uvicorn_logger.setLevel(logging.INFO)
+
+    uvicorn_error_logger = logging.getLogger("uvicorn.error")
+    uvicorn_error_logger.handlers = logger.handlers
+    uvicorn_error_logger.setLevel(logging.INFO)
+
+    uvicorn_access_logger = logging.getLogger("uvicorn.access")
+    uvicorn_access_logger.handlers = logger.handlers
+    uvicorn_access_logger.setLevel(logging.INFO)
+
+
+./app/config.py
+"""
+Global configuration settings and constants.
+"""
+import os
+
+# Logging
+LOG_LEVEL = "INFO"
+LOG_FORMAT = "[%(asctime)s] %(levelname)s %(name)s - %(message)s"
+
+API_TITLE = "Phishing Detection API"
+API_VERSION = "1.0.0"
+
+# Qdrant
+#QDRANT_URL = os.getenv("QDRANT_URL", "http://192.168.117.177:6333")
+QDRANT_URL = os.getenv("QDRANT_URL", "http://192.168.1.167:6333")
+COLLECTION_NAME = "emails"
+
+# model
+# MODEL_PATH = os.getenv("MODEL_PATH", "models/deberta-v3-base")
+# MODEL_NAME = os.getenv("MODEL_NAME", "microsoft/deberta-v3-base")
+# MODEL_DIMENSION = int(os.getenv("MODEL_DIMENSION", "768"))
+# MODEL_NAME = "microsoft/deberta-v3-base"  # Or "distilbert-base-uncased"
+# 📊 Test Summary:
+# Total Emails Tested: 570
+# Correct Classifications: 468 (82.11%)
+# False Positives: 0 (0.00%)
+# False Negatives: 102 (17.89%)
+
+# 🔍 Confidence Level Breakdown:
+# High Confidence: 30 (5.26%)
+# Medium Confidence: 13 (2.28%)
+# Low Confidence: 527 (92.46%)
+
+# 🔎 Similarity Statistics:
+# Avg PhishSim: 8.538
+# Avg LegitSim: 41.449
+
+MODEL_NAME = os.getenv("MODEL_NAME", "sentence-transformers/all-MiniLM-L6-v2")
+MODEL_PATH = os.getenv("MODEL_PATH", "models/all-MiniLM-L6-v2")
+MODEL_DIMENSION = int(os.getenv("MODEL_DIMENSION", "384"))
+# Total Emails Tested: 1865
+# Total Spam Emails Tested: 465
+# Total Ham Emails Tested: 1400
+# Correct Classifications: 1468
+# False Positives: 0 (0.00%)
+# False Negatives: 397 (21.29%)
+# Overall Accuracy: 78.71%
+# 🔍 Confidence Level Statistics:
+# High Confidence: 68 (3.65%)
+# Medium Confidence: 1 (0.05%)
+# Low Confidence: 1796 (96.30%
+
+
+# MODEL_NAME = os.getenv("MODEL_NAME", "Intel/dynamic_tinybert")
+# MODEL_PATH = os.getenv("MODEL_PATH", "models/dynamic_tinybert")
+# MODEL_DIMENSION = int(os.getenv("MODEL_DIMENSION", "768"))
+# 📊 Test Summary:
+# Total Emails Tested: 570
+# Correct Classifications: 444 (77.89%)
+# False Positives: 0 (0.00%)
+# False Negatives: 126 (22.11%)
+
+# 🔍 Confidence Level Breakdown:
+# High Confidence: 3 (0.53%)
+# Medium Confidence: 24 (4.21%)
+# Low Confidence: 543 (95.26%)
+
+# 🔎 Similarity Statistics:
+# Avg PhishSim: 9.884
+# Avg LegitSim: 39.848
+
+# Batch Upsert
+BATCH_SIZE = 40
+FLUSH_INTERVAL = 10  # seconds
+
+
+./app/utils.py
+import re
+import base64
+import hashlib
+import logging
+import asyncio
+import email
+from email.parser import BytesParser
+from email import policy
+from typing import List
+from bs4 import BeautifulSoup
+
+from .models import EmailRequest
+
+logger = logging.getLogger("phishing_api")
+
+def extract_urls(text: str) -> List[str]:
+    """Extract all http/https URLs from a string."""
+    return re.findall(r"https?://[^\s\"<>]+", text)
+
+async def extract_eml_body(msg: email.message.Message) -> str:
+    """
+    Extract the text body from an email.message.Message object asynchronously.
+    """
+    def sync_extract():
+        if msg.is_multipart():
+            for part in msg.walk():
+                ctype = part.get_content_type()
+                cdisp = str(part.get("Content-Disposition"))
+                if ctype == "text/plain" and "attachment" not in cdisp:
+                    return part.get_payload(decode=True).decode(errors="replace")
+                elif ctype == "text/html" and "attachment" not in cdisp:
+                    return BeautifulSoup(
+                        part.get_payload(decode=True).decode(errors="replace"),
+                        "html.parser"
+                    ).get_text()
+        return msg.get_payload(decode=True).decode(errors="replace")
+    return await asyncio.to_thread(sync_extract)
+
+async def extract_email_features(email: EmailRequest):
+    """
+    Extract key features, including a short body_preview, domain mismatch, links, etc.
+    WITHOUT storing the entire body in the final payload.
+    """
+    try:
+        decoded_body_bytes = base64.b64decode(email.body)
+    except Exception:
+        logger.exception("Failed to decode base64 email body.")
+        decoded_body_bytes = b""
+
+    # We'll return this so the embedding function can see the entire body,
+    # but we won't store it in the final payload. 
+    body_str = decoded_body_bytes.decode(errors="replace")
+
+    # Only store a short snippet in Qdrant
+    body_preview = body_str[:2000]
+
+    subject = email.subject or ""
+    sender = email.sender or "unknown@domain"
+    reply_to = email.reply_to or sender
+    customer_id = email.customerId
+
+    sender_domain = sender.split("@")[-1] if "@" in sender else "unknown"
+    reply_to_domain = reply_to.split("@")[-1] if "@" in reply_to else "unknown"
+    sender_reply_mismatch = (sender_domain.lower() != reply_to_domain.lower())
+
+    # Extract links
+    soup = BeautifulSoup(body_str, "html.parser")
+    html_links = [a["href"] for a in soup.find_all("a", href=True)]
+    text_links = extract_urls(body_str)
+    merged_links = list(set(html_links + text_links))
+
+    def compute_hash(links_joined: str):
+        email_string = subject + body_preview + links_joined + sender_domain
+        return hashlib.sha256(email_string.encode()).hexdigest()
+
+    email_hash = compute_hash("".join(merged_links))
+
+    # Collect link domains
+    link_domains = []
+    for link in merged_links:
+        match = re.match(r"^https?://([^/]+)/?", link)
+        if match:
+            link_domains.append(match.group(1).lower())
+    link_domains = list(set(link_domains))
+
+    # Return a dictionary with minimal stored data
+    # But also pass back the entire 'body_str' for embedding usage
+    feats = {
+        "subject": subject,
+        "body_preview": body_preview,
+        "links": merged_links,
+        "link_domains": link_domains,
+        "sender_domain": sender_domain,
+        "reply_to_domain": reply_to_domain,
+        "sender_reply_mismatch": sender_reply_mismatch,
+        "attachments": email.attachments or [],
+        "email_hash": email_hash,
+        "customerId": customer_id,
+        # Add 'full_body' just in memory, not for final storage:
+        "_full_body_for_embedding": body_str  # We'll remove this before storing in Qdrant
+    }
+
+    return feats
+
+# ./app/utils.py
+
+async def parse_raw_eml(eml_bytes: bytes):
+    """
+    Parse a raw EML file asynchronously.
+    Returns a dict with subject, base64-encoded body, and sender.
+    """
+    msg = BytesParser(policy=policy.default).parsebytes(eml_bytes)
+    subject = msg["subject"] or "No Subject"
+    sender = msg["from"] or "Unknown Sender"
+    body_str = await extract_eml_body(msg)
+
+    # Optional: Strict Check
+    # If we detect an obviously invalid EML or "junk" content, raise an error.
+    # For instance, say we want to ensure the sender is not "Unknown Sender" 
+    # AND the body has at least some non-whitespace text:
+    if sender == "Unknown Sender" and not body_str.strip():
+        raise ValueError("Invalid EML content – missing sender and body text.")
+
+    return {
+        "subject": subject,
+        "body": base64.b64encode(body_str.encode("utf-8")).decode("utf-8"),
+        "sender": sender
+    }
+
+
+
+./app/vector_search.py
+import uuid
+import logging
+import os
+import asyncio
+import torch
+import numpy as np
+from transformers import AutoModel, AutoTokenizer, DebertaV2Tokenizer
+from qdrant_client.http.models import Filter, FieldCondition, MatchValue, PointStruct
+from .database import client
+from .models import EmailRequest
+from .utils import extract_email_features
+from .config import COLLECTION_NAME, MODEL_PATH, MODEL_NAME
+from .logging_config import setup_logging
+
+# Initialize Logger
+logger = setup_logging()
+logger = logging.getLogger("phishing_api")
+
+# Detect GPU
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+logger.info(f"Using device: {device}")
+
+# Ensure the correct tokenizer is used for DeBERTa
+TokenizerClass = DebertaV2Tokenizer if "deberta" in MODEL_NAME.lower() else AutoTokenizer
+
+# Load or download model
+if os.path.exists(MODEL_PATH):
+    logger.info(f"✅ Loading model from {MODEL_PATH}")
+    tokenizer = TokenizerClass.from_pretrained(MODEL_PATH)
+    model = AutoModel.from_pretrained(MODEL_PATH).to(device)
+else:
+    logger.info(f"⚠️ Model not found at {MODEL_PATH}. Downloading {MODEL_NAME}...")
+    tokenizer = TokenizerClass.from_pretrained(MODEL_NAME)
+    model = AutoModel.from_pretrained(MODEL_NAME).to(device)
+    model.save_pretrained(MODEL_PATH)
+    tokenizer.save_pretrained(MODEL_PATH)
+    logger.info(f"✅ Model saved at: {MODEL_PATH}")
+
+# Ensure model is in evaluation mode
+model.eval()
+
+def chunk_text(text: str, chunk_size=256, overlap=50) -> list[str]:
+    """Splits text into chunks with optional overlap."""
+    chunks = []
+    start = 0
+    while start < len(text):
+        end = start + chunk_size
+        chunk = text[start:end]
+        chunks.append(chunk)
+        start += (chunk_size - overlap)
+    return chunks
+
+def embed_text(text: str) -> torch.Tensor:
+    """Embed a single string using the model."""
+    inputs = tokenizer(text, return_tensors="pt", padding=True, truncation=True).to(device)
+    with torch.no_grad():
+        output = model(**inputs).last_hidden_state[:, 0, :].to("cpu")  # Move back to CPU
+    return output.squeeze(0)
+
+def create_aggregated_embedding(full_text: str) -> list[float]:
+    """Generate an average embedding over text chunks."""
+    chunks = chunk_text(full_text, chunk_size=256, overlap=50)
+    embeddings = [embed_text(c) for c in chunks if c.strip()]
+    
+    if not embeddings:
+        return embed_text("").tolist()
+    
+    avg_embedding = torch.mean(torch.stack(embeddings), dim=0)  # Average over all chunks
+    return avg_embedding.tolist()
+
+async def get_cached_embedding(text: str):
+    """Async wrapper for embedding generation."""
+    return await asyncio.to_thread(sync_get_cached_embedding, text)
+
+def sync_get_cached_embedding(text: str):
+    """Synchronous embedding generation with comments."""
+
+    # Tokenize the input text
+    inputs = tokenizer(text, return_tensors="pt", padding=True, truncation=True).to(device)
+
+    # Generate embeddings using the model while ensuring gradients are not computed
+    with torch.no_grad():
+        output = model(**inputs).last_hidden_state[:, 0, :].to("cpu")
+
+    # Return the embedding as a list of floats
+    return output.squeeze().tolist()
+
+async def store_email(
+    email: EmailRequest, 
+    label: str,               # "good" or "bad"
+    sub_label: str,           # e.g. "spam", "transactional", ...
+    batch_queue
+) -> str:
+    """
+    Queues email for batch upsert in Qdrant.
+    'label' is the main_label ('good' or 'bad'),
+    'sub_label' is the finer classification ('spam', 'transactional', etc.).
+    """
+    feats = await extract_email_features(email)
+    if not isinstance(feats, dict):
+        raise TypeError(f"extract_email_features returned {type(feats)}, expected dict")
+
+    # Store both labels:
+    feats["label"] = label           # main label, e.g. "good" or "bad"
+    feats["sub_label"] = sub_label   # finer label, e.g. "spam", "transactional"
+
+    # We build a stable UUID using the email_hash plus the label combination
+    import uuid
+    email_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, feats["email_hash"] + label + sub_label))
+
+    full_body_str = feats.pop("_full_body_for_embedding", None)
+
+    if full_body_str:
+        vector_embedding = create_aggregated_embedding(full_body_str)
+    else:
+        # fallback: just embed the subject + preview
+        fallback_text = f"{feats['subject']} {feats['body_preview']}"
+        vector_embedding = await get_cached_embedding(fallback_text)
+
+    # Add the data to the queue
+    from qdrant_client.http.models import PointStruct
+    batch_queue.append(
+        PointStruct(
+            id=email_id,
+            vector=vector_embedding,
+            payload=feats
+        )
+    )
+
+    logger.info(f"📥 Queued {label.upper()} email [{sub_label}]: {feats['subject']} (ID={email_id})")
+    return f"✅ Queued {label.upper()} email [{sub_label}]: {feats['subject']}"
+
+async def check_email_similarity(email_feats: dict):
+    """
+    Retrieve nearest neighbors from Qdrant and compute a 'bad_score' percentage
+    (like the old phishing_score). The final label is 'bad' if >= 50%, otherwise 'good'.
+    """
+    try:
+        full_body = email_feats.pop("_full_body_for_embedding", None)
+        if full_body and full_body.strip():
+            vector_embedding = create_aggregated_embedding(full_body)
+        else:
+            # fallback
+            vector_embedding = embed_text(
+                f"{email_feats.get('subject','')} {email_feats.get('body_preview','')}"
+            ).tolist()
+
+        results = await client.search(
+            collection_name=COLLECTION_NAME,
+            query_vector=vector_embedding,
+            limit=50,
+            score_threshold=0.01
+        )
+
+        # Sum up scores for 'good' vs 'bad'
+        sum_good_sim = 0.0
+        sum_bad_sim = 0.0
+
+        # Optionally keep track of the single best match for sub_label
+        top_match_label = None
+        top_match_sub_label = None
+        top_match_score = -999.0
+
+        for r in results:
+            sim = r.score
+            lbl = r.payload.get("label", "unknown")      # "good" or "bad"
+            sbl = r.payload.get("sub_label", "unknown")  # e.g. "spam", "business"
+            if sim > top_match_score:
+                top_match_score = sim
+                top_match_label = lbl
+                top_match_sub_label = sbl
+
+            if lbl == "good":
+                sum_good_sim += sim
+            elif lbl == "bad":
+                sum_bad_sim += sim
+
+        # Compute "bad" probability
+        bad_prob = sum_bad_sim / (sum_bad_sim + sum_good_sim + 1e-7)
+        bad_score = int(round(bad_prob * 100))
+        closest_label = "bad" if bad_prob >= 0.5 else "good"
+
+        reasons = [
+            f"sum_good_sim={sum_good_sim:.3f}",
+            f"sum_bad_sim={sum_bad_sim:.3f}",
+        ]
+        if top_match_label is not None:
+            reasons.append(f"Top match => {top_match_label}, sub_label={top_match_sub_label}")
+
+        # If we have no matches at all
+        if sum_good_sim == 0.0 and sum_bad_sim == 0.0:
+            reasons.append("No nearest neighbors labeled 'good' or 'bad' found.")
+
+        return bad_score, reasons, closest_label
+
+    except Exception as e:
+        logger.error(f"❌ Qdrant search failed: {e}")
+        return 0, [f"Error searching Qdrant: {e}"], "Unknown"
+
+
+
+./app/__init__.py
+# This file can be empty or can include package-level imports.
+# It simply indicates that "app" is a Python package.
+
+
+./app/models.py
+from pydantic import BaseModel
+from typing import List, Optional
+
+class EmailRequest(BaseModel):
+    subject: str
+    body: str  # base64-encoded
+    sender: str
+    reply_to: Optional[str] = None
+    attachments: Optional[List[str]] = []
+    type: Optional[str] = None
+    customerId: Optional[str] = None
+
+class AnalyzeResponse(BaseModel):
+    phishing_score: int
+    confidence_level: str
+    closest_match: Optional[str]
+    reasons: List[str]
+
+
+./app/batch_upsert.py
+import asyncio
+import time
+import logging
+from collections import deque
+
+from .database import client
+from .config import BATCH_SIZE, FLUSH_INTERVAL, COLLECTION_NAME
+
+logger = logging.getLogger("phishing_api")
+
+batch_queue = deque()
+
+async def batch_upsert():
+    """
+    Background task that periodically upserts batched points into Qdrant.
+    Includes error handling to avoid crashing if Qdrant is temporarily unreachable.
+    """
+    last_upsert_time = time.perf_counter()
+
+    # Optional: set a base delay if you want a backoff on repeated failures
+    base_retry_delay = 3  # seconds
+    current_retry_delay = base_retry_delay
+
+    while True:
+        elapsed = time.perf_counter() - last_upsert_time
+        # If we've either accumulated enough points or enough time has passed,
+        # we attempt to upsert.
+        if len(batch_queue) >= BATCH_SIZE or (elapsed >= FLUSH_INTERVAL and len(batch_queue) > 0):
+            points = []
+            while batch_queue:
+                points.append(batch_queue.popleft())
+
+            try:
+                await client.upsert(COLLECTION_NAME, points)
+                logger.info(f"✅ Upserted {len(points)} points to Qdrant.")
+                last_upsert_time = time.perf_counter()
+                # On success, reset retry delay
+                current_retry_delay = base_retry_delay
+
+            except Exception as e:
+                # If we fail, we log and re-queue the points
+                logger.error(f"❌ Upsert to Qdrant failed: {e}")
+                logger.info(f"Re-queueing {len(points)} points and retrying...")
+
+                # Put points back into the left side of the queue
+                # so we can try again on the next iteration
+                for p in reversed(points):
+                    batch_queue.appendleft(p)
+
+                # Optional: Wait longer before the next attempt (simple backoff)
+                logger.info(f"Waiting {current_retry_delay} seconds before retry...")
+                await asyncio.sleep(current_retry_delay)
+
+                # Exponential backoff (cap to some max if you like)
+                current_retry_delay = min(current_retry_delay * 2, 60)
+
+        # Normal sleep loop if no batch is ready or after an attempt
+        await asyncio.sleep(1)
+
+
+async def init_batch_upsert():
+    """
+    Called on application startup to begin the background upsert process.
+    """
+    asyncio.create_task(batch_upsert())
+
+
+./app/main.py
+import logging
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+import sentry_sdk
+
+from .logging_config import setup_logging
+from .config import API_TITLE, API_VERSION
+from .routes.metrics import PrometheusMiddleware, metrics_router
+from .routes.insert import insert_router
+from .database import ensure_collection_exists
+from .routes.analyze import analyze_router
+from .routes.report import report_router
+from .routes.parse_eml import parse_eml_router
+from .batch_upsert import init_batch_upsert
+
+# Configure logging on startup
+setup_logging()
+
+logger = logging.getLogger("phishing_api")
+
+sentry_sdk.init(
+    dsn="https://62070df56536d744deb5335983041800@o507054.ingest.us.sentry.io/4508866643099648",
+    # Add data like request headers and IP for users,
+    # see https://docs.sentry.io/platforms/python/data-management/data-collected/ for more info
+    send_default_pii=True,
+    # Set traces_sample_rate to 1.0 to capture 100%
+    # of transactions for tracing.
+    traces_sample_rate=None,
+    # _experiments={
+    #     # Set continuous_profiling_auto_start to True
+    #     # to automatically start the profiler on when
+    #     # possible.
+    #     "continuous_profiling_auto_start": True,
+    # },
+)
+
+# Create FastAPI application
+app = FastAPI(title=API_TITLE, version=API_VERSION)
+
+# CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # or specify e.g. ["http://localhost:8000"] for stricter security
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Prometheus middleware
+app.add_middleware(PrometheusMiddleware)
+
+# Include route modules
+app.include_router(metrics_router)
+app.include_router(insert_router)
+app.include_router(analyze_router)
+app.include_router(report_router)
+app.include_router(parse_eml_router)
+
+logger.info("API started")
+
+# Initialize background batch upsert
+@app.on_event("startup")
+async def startup_event():
+    # FIRST: Make sure the collection exists
+    await ensure_collection_exists()
+    await init_batch_upsert()  # Ensure async function is awaited
+
+### start ! note that the start can take a while
+# uvicorn app.main:app --host 0.0.0.0 --port 5000
+####
+
+./app/routes/parse_eml.py
+import logging
+from fastapi import APIRouter, File, UploadFile, HTTPException
+from ..utils import parse_raw_eml
+
+logger = logging.getLogger("phishing_api")
+
+parse_eml_router = APIRouter()
+
+@parse_eml_router.post("/parse_eml")
+async def parse_eml(file: UploadFile = File(...)):
+    """
+    Parse a raw EML file. Returns a JSON structure with the subject, body (as base64), and sender.
+    """
+    try:
+        eml_bytes = await file.read()
+        parsed_email = await parse_raw_eml(eml_bytes)
+        
+        return {"message": "Parsed EML", "email": parsed_email}
+    except Exception as e:
+        logger.error(f"Failed to parse EML: {e}")
+       # We raise an HTTPException(400) if we consider it invalid
+        raise HTTPException(status_code=400, detail=f"Failed to parse EML: {e}")
+
+./app/routes/metrics.py
+import time
+from prometheus_client import (
+    CONTENT_TYPE_LATEST,
+    Counter,
+    Histogram,
+    generate_latest
+)
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response
+from fastapi import APIRouter, Request
+
+# Prometheus metrics
+REQUEST_LATENCY = Histogram(
+    "request_duration_seconds",
+    "Request duration in seconds",
+    ["method", "path"]
+)
+REQUEST_COUNT = Counter(
+    "request_count",
+    "Number of requests by method, path and HTTP status",
+    ["method", "path", "status_code"]
+)
+
+class PrometheusMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        start_time = time.perf_counter()
+        response = await call_next(request)
+        request_duration = time.perf_counter() - start_time
+
+        method = request.method
+        path = request.url.path
+        status_code = response.status_code
+
+        REQUEST_LATENCY.labels(method=method, path=path).observe(request_duration)
+        REQUEST_COUNT.labels(method=method, path=path, status_code=status_code).inc()
+
+        return response
+
+metrics_router = APIRouter()
+
+@metrics_router.get("/metrics")
+async def metrics():
+    """Expose Prometheus metrics asynchronously."""
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+
+./app/routes/insert.py
+import logging
+from fastapi import APIRouter, HTTPException
+from ..models import EmailRequest
+from ..vector_search import store_email
+from ..batch_upsert import batch_queue
+
+logger = logging.getLogger("phishing_api")
+
+insert_router = APIRouter()
+
+# Define all valid sub-labels and map them to their main label (good or bad)
+VALID_TYPES = {
+    # good
+    "transactional": "good",
+    "business": "good",
+    "newsletter": "good",
+    "subscription": "good",
+    "notification": "good",
+    "marketing": "good",
+    # bad
+    "spam": "bad",
+    "bounced": "bad",
+}
+
+@insert_router.post("/insert")
+async def insert_email(email: EmailRequest):
+    """
+    Insert an email into the Qdrant vector store asynchronously.
+    The `type` field must be one of:
+      - transactional, business, newsletter, subscription, notification, marketing (all 'good')
+      - spam, bounced (all 'bad')
+    """
+    logger.info(f"[/insert] subject={email.subject}")
+
+    if not email.type:
+        raise HTTPException(status_code=400, detail="No email type provided.")
+
+    sub_label = email.type.lower().strip()
+
+    if sub_label not in VALID_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Invalid email type '{email.type}'. "
+                f"Must be one of: {', '.join(VALID_TYPES.keys())}."
+            ),
+        )
+
+    main_label = VALID_TYPES[sub_label]  # "good" or "bad"
+
+    # The store_email function expects the second argument as the “label” to store
+    # in Qdrant, but we also want to pass the sub_label. We'll do that by combining
+    # them into a small dict or tuple that store_email can handle.
+    # For backward-compat, the store_email function uses "label" in the Qdrant payload,
+    # so we will treat that as our main_label, and store sub_label in the payload as well.
+
+    msg = await store_email(
+        email=email,
+        label=main_label,         # old top-level label
+        sub_label=sub_label,      # new finer category
+        batch_queue=batch_queue
+    )
+
+    return {"message": msg}
+
+
+./app/routes/__init__.py
+# This file can be empty or can include shared route logic if desired.
+
+
+./app/routes/analyze.py
+import logging
+from fastapi import APIRouter
+from ..models import EmailRequest, AnalyzeResponse
+from ..utils import extract_email_features
+from ..vector_search import check_email_similarity
+
+logger = logging.getLogger("phishing_api")
+
+analyze_router = APIRouter()
+
+@analyze_router.post("/analyze", response_model=AnalyzeResponse)
+async def analyze_email(email: EmailRequest):
+    """
+    Analyze an email by extracting features (including the full body for in-memory embedding)
+    and then checking similarity against Qdrant via a chunk-based embedding approach.
+    """
+    logger.info(f"[/analyze] subject={email.subject}")
+
+    try:
+        # 1) Extract features from the email (stores full body in memory but not in Qdrant)
+        feats = await extract_email_features(email)
+
+        # 2) Compute phishing score, reasons, and closest label
+        phishing_score, reasons, closest_label = await check_email_similarity(feats)
+
+        # 3) Derive confidence level from phishing score
+        if phishing_score >= 80:
+            conf = "High"
+        elif phishing_score >= 60:
+            conf = "Medium"
+        else:
+            conf = "Low"
+
+        logger.info(
+            f"✅ Analyzed -> score={phishing_score}, conf={conf}, label={closest_label}, {reasons=}"
+        )
+
+        # 4) Return an AnalyzeResponse
+        return AnalyzeResponse(
+            phishing_score=phishing_score,
+            confidence_level=conf,
+            closest_match=closest_label,
+            reasons=reasons
+        )
+
+    except Exception as e:
+        logger.exception(f"❌ Exception occurred while analyzing email: {e}")
+
+        return AnalyzeResponse(
+            phishing_score=0,
+            confidence_level="Unknown",
+            closest_match="Unknown",
+            reasons=[f"Error: {str(e)}"]
+        )
+
+./app/routes/report.py
+import logging
+from fastapi import APIRouter, HTTPException
+from qdrant_client.http.models import Filter, FieldCondition, MatchValue
+
+from ..models import EmailRequest
+from ..database import client
+from ..utils import extract_email_features
+from ..config import COLLECTION_NAME
+from ..vector_search import create_aggregated_embedding, embed_text
+
+logger = logging.getLogger("phishing_api")
+
+report_router = APIRouter()
+
+@report_router.post("/report_false_positive")
+async def report_false_positive(email: EmailRequest):
+    """
+    Removes the first matching vector from Qdrant that corresponds to the given email.
+    Uses a chunk-based (or fallback) embedding approach to locate the nearest neighbor.
+    """
+    logger.info(f"[/report_false_positive] subject={email.subject}")
+
+    # 1) Extract features (including the full body in-memory if you have that)
+    feats = await extract_email_features(email)
+
+    # 2) Either chunk-embed the full body or fallback to subject+preview
+    full_body = feats.pop("_full_body_for_embedding", None)
+    if full_body and full_body.strip():
+        embedding = create_aggregated_embedding(full_body)  # returns a list[float]
+    else:
+        # minimal fallback text
+        fallback_text = f"{feats.get('subject','')} {feats.get('body_preview','')}"
+        embedding = embed_text(fallback_text).tolist()  # single-pass embedding
+
+    # 3) Build an optional filter based on customerId
+    filt = None
+    if feats.get("customerId"):
+        filt = Filter(
+            must=[FieldCondition(
+                key="customerId",
+                match=MatchValue(value=feats["customerId"])
+            )]
+        )
+
+    # 4) Search Qdrant for the closest match (limit=1)
+    res = await client.search(
+        collection_name=COLLECTION_NAME,
+        query_vector=embedding,
+        query_filter=filt,
+        limit=1
+    )
+
+    # 5) If found, delete it
+    if res:
+        e_id = res[0].id
+        await client.delete(collection_name=COLLECTION_NAME, points_selector=[e_id])
+        logger.info(f"✅ Removed false positive: {feats['subject']} (ID={e_id})")
+        return {"message": f"Removed false positive email: {feats['subject']}"}
+    else:
+        logger.warning("⚠️ Email not found.")
+        raise HTTPException(status_code=404, detail="Email not found in DB.")
+
+

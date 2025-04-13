@@ -1,0 +1,1338 @@
+./import-spam_dataset.py
+#%% import first
+
+# Import necessary libraries
+import os
+import pandas as pd
+import requests
+import base64
+
+#%% load spam_dataset.csv
+
+# Load the dataset
+file_path = f"{os.path.dirname(os.path.abspath(__file__))}/spam_dataset.csv"  # Adjust the path if needed
+data = pd.read_csv(file_path)
+
+# Display the first few rows to confirm the structure
+print("Dataset preview:")
+print(data.head())
+
+# API endpoint
+insert_api_url = "http://localhost:5000/insert"
+
+# Function to determine email type based on 'is_spam' value
+def get_email_type(is_spam):
+    return "phishing" if is_spam == 1 else "legitimate"
+
+# Iterate over each row and send a POST request to the API
+for index, row in data.iterrows():
+    email_content = row["message_content"]
+    email_type = get_email_type(row["is_spam"])
+    
+    # Prepare the request payload
+    payload = {
+        "subject": "",
+        "body": base64.b64encode(email_content.encode("utf-8")).decode("utf-8"),
+        "sender": "",
+        "customerId": "99999",
+        "type": email_type
+    }
+
+    # Send the POST request
+    response = requests.post(insert_api_url, json=payload)
+
+    # Print response status
+    if response.status_code == 200:
+        print(f"Row {index} inserted successfully: {response.json()['message']}")
+    else:
+        print(f"Error inserting row {index}: {response.status_code} - {response.text}")
+
+
+
+./test-import-spam_dataset.py
+#%% Import libraries
+import os
+import pandas as pd
+import requests
+import base64
+
+#%% Load dataset
+file_path = f"{os.path.dirname(os.path.abspath(__file__))}/spam_dataset.csv"
+data = pd.read_csv(file_path)
+
+# Display the first few rows to confirm the structure
+print("Dataset preview:")
+print(data.head())
+
+# API endpoint for analyzing emails
+analyze_api_url = "http://localhost:5000/analyze"
+
+# Function to determine email type based on 'is_spam' value
+def get_expected_label(is_spam):
+    return "phishing" if is_spam == 1 else "legitimate"
+
+# Variables to track results
+total_emails = 0
+correctly_classified = 0
+false_positives = 0
+false_negatives = 0
+
+results = []
+
+#%% Iterate over each row and send a POST request to the API
+for index, row in data.iterrows():
+    total_emails += 1
+    email_content = row["message_content"]
+    expected_label = get_expected_label(row["is_spam"])
+    
+    # Prepare the request payload for analysis
+    payload = {
+        "subject": "",
+        "body": base64.b64encode(email_content.encode("utf-8")).decode("utf-8"),
+        "sender": ""
+    }
+
+    # Send the POST request to analyze the email
+    response = requests.post(analyze_api_url, json=payload)
+
+    if response.status_code == 200:
+        result = response.json()
+        predicted_label = "phishing" if result["phishing_score"] >= 70 else "legitimate"
+        
+        # Check if the prediction matches the expected label
+        is_correct = (predicted_label == expected_label)
+        correctly_classified += 1 if is_correct else 0
+        
+        # Track false positives and false negatives
+        if predicted_label == "phishing" and expected_label == "legitimate":
+            false_positives += 1
+        elif predicted_label == "legitimate" and expected_label == "phishing":
+            false_negatives += 1
+        
+        # Append result for later review
+        results.append({
+            "index": index,
+            "expected_label": expected_label,
+            "predicted_label": predicted_label,
+            "confidence_level": result["confidence_level"],
+            "phishing_score": result["phishing_score"],
+            "is_correct": is_correct
+        })
+        
+        print(f"Row {index}: Expected: {expected_label}, Predicted: {predicted_label}, Score: {result['phishing_score']}%")
+    else:
+        print(f"Error analyzing row {index}: {response.status_code} - {response.text}")
+
+#%% Calculate and display statistics
+accuracy = (correctly_classified / total_emails) * 100
+false_positive_rate = (false_positives / total_emails) * 100
+false_negative_rate = (false_negatives / total_emails) * 100
+
+print("\n===================================")
+print(f"Total Emails: {total_emails}")
+print(f"Correctly Classified: {correctly_classified}")
+print(f"Accuracy: {accuracy:.2f}%")
+print(f"False Positives: {false_positives} ({false_positive_rate:.2f}%)")
+print(f"False Negatives: {false_negatives} ({false_negative_rate:.2f}%)")
+print("===================================\n")
+
+#%% Save results to a CSV for further review
+results_df = pd.DataFrame(results)
+results_df.to_csv(f"{os.path.dirname(file_path)}/validation_results.csv", index=False)
+print("Results saved to validation_results.csv.")
+
+
+./test-legacy107_spamming-email-classification.py
+import os
+import time
+import base64
+import requests
+import pandas as pd
+import re
+import csv
+from tqdm import tqdm
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+# -------------------------------
+# 📁 Dataset Paths (Hugging Face)
+# -------------------------------
+# https://huggingface.co/datasets/legacy107/spamming-email-classification
+DATASET_BASE_URL = "hf://datasets/legacy107/spamming-email-classification/"
+splits = {
+    "train": "data/train-00000-of-00001-14eed08eb524d6f5.parquet",
+    "test": "data/test-00000-of-00001-622decef5f682f6f.parquet"
+}
+
+# -------------------------------
+# ⚙️ API Endpoints
+# -------------------------------
+INSERT_API_URL = f"{os.getenv('API_URL', 'http://localhost:5000')}/insert"
+ANALYZE_API_URL = f"{os.getenv('API_URL', 'http://localhost:5000')}/analyze"
+
+# -------------------------------
+# 📦 Load Datasets
+# -------------------------------
+print("Loading datasets...")
+train_data = pd.read_parquet(DATASET_BASE_URL + splits["train"])
+test_data = pd.read_parquet(DATASET_BASE_URL + splits["test"])
+print(f"✅ Datasets loaded successfully! (Train: {len(train_data)}, Test: {len(test_data)})")
+
+# Count Spam and Ham in Test Set
+spam_count = test_data[test_data["Spam"] == 1].shape[0]
+ham_count = test_data[test_data["Spam"] == 0].shape[0]
+
+print(f"📊 Test Dataset Breakdown:")
+print(f"  - Spam Emails: {spam_count}")
+print(f"  - Non-Spam (Ham) Emails: {ham_count}\n")
+
+# -------------------------------
+# 📌 Helper Functions
+# -------------------------------
+def get_email_type(label):
+    """Convert dataset label (0 or 1) to 'phishing' or 'legitimate'."""
+    return "phishing" if label == 1 else "legitimate"
+
+def parse_email_text(text):
+    """Treat the entire text as the body; use an empty subject."""
+    return "", text.strip()
+
+def process_email_for_insert(row):
+    """
+    Prepares and sends a single email's data to the /insert endpoint.
+    Returns True if inserted successfully, False otherwise.
+    """
+    try:
+        subject, body = parse_email_text(row["Text"])
+        email_type = get_email_type(row["Spam"])
+
+        payload = {
+            "subject": subject,  # Always empty
+            "body": base64.b64encode(body.encode("utf-8")).decode("utf-8"),
+            "sender": "unknown@example.com",
+            "type": email_type
+        }
+
+        resp = requests.post(INSERT_API_URL, json=payload)
+        return (resp.status_code == 200)
+    except Exception as e:
+        print(f"❌ Exception inserting email: {e}")
+        return False
+
+def analyze_email(row, idx):
+    """
+    Sends the email to /analyze and gathers:
+    - row index (as 'EmailID')
+    - expected_type
+    - predicted_type
+    - confidence_level
+    - phishing_score
+    - PhishSim / LegitSim from reasons
+    - correctness (Correct / FalsePositive / FalseNegative)
+
+    Returns a dict for CSV export & final stats.
+    """
+    subject, body = parse_email_text(row["Text"])
+    expected_type = get_email_type(row["Spam"])
+
+    payload = {
+        "subject": subject,
+        "body": base64.b64encode(body.encode("utf-8")).decode("utf-8"),
+        "sender": "unknown@example.com"
+    }
+
+    try:
+        response = requests.post(ANALYZE_API_URL, json=payload)
+        if response.status_code != 200:
+            return {
+                "EmailID": idx,
+                "ExpectedType": expected_type,
+                "PredictedType": "ERROR",
+                "PhishingScore": None,
+                "Confidence": "ERROR",
+                "PhishSim": None,
+                "LegitSim": None,
+                "Correctness": "AnalyzeFailed",
+            }
+
+        response_data = response.json()
+        phishing_score = response_data.get("phishing_score", 0)
+        confidence_level = response_data.get("confidence_level", "Unknown")
+        reasons = response_data.get("reasons", [])
+
+        # Attempt to parse "PhishSim=xx, LegitSim=yy" from any reason string
+        phish_sim = None
+        legit_sim = None
+        for reason in reasons:
+            match = re.search(r"PhishSim=([\d.]+).*LegitSim=([\d.]+)", reason)
+            if match:
+                phish_sim = float(match.group(1))
+                legit_sim = float(match.group(2))
+                break
+
+        # Decide predicted type
+        predicted_type = "phishing" if phishing_score >= 70 else "legitimate"
+
+        # Determine correctness
+        if predicted_type == expected_type:
+            correctness = "Correct"
+        elif predicted_type == "phishing" and expected_type == "legitimate":
+            correctness = "FalsePositive"
+        else:
+            correctness = "FalseNegative"
+
+        return {
+            "EmailID": idx,
+            "ExpectedType": expected_type,
+            "PredictedType": predicted_type,
+            "PhishingScore": phishing_score,
+            "Confidence": confidence_level,
+            "PhishSim": phish_sim,
+            "LegitSim": legit_sim,
+            "Correctness": correctness
+        }
+    except Exception as e:
+        print(f"❌ Error analyzing email index={idx}: {e}")
+        return {
+            "EmailID": idx,
+            "ExpectedType": expected_type,
+            "PredictedType": "ERROR",
+            "PhishingScore": None,
+            "Confidence": "ERROR",
+            "PhishSim": None,
+            "LegitSim": None,
+            "Correctness": "AnalyzeException"
+        }
+
+# -------------------------------
+# 🚀 Import (Train) Emails into API
+# -------------------------------
+print(f"📤 Importing {len(train_data)} training emails into the API...")
+
+with ThreadPoolExecutor(max_workers=5) as executor, tqdm(total=len(train_data), desc="Importing", unit="emails") as pbar:
+    futures = [executor.submit(process_email_for_insert, row) for _, row in train_data.iterrows()]
+    for future in as_completed(futures):
+        if future.result():
+            pbar.update(1)
+
+print("\n✅ Training data import completed!")
+
+# -------------------------------
+# 🛠️ Test (Analyze) the API
+# -------------------------------
+print(f"\n🔍 Testing {len(test_data)} emails...")
+time.sleep(3)
+
+analysis_rows = []
+with tqdm(total=len(test_data), desc="Testing", unit="emails") as pbar:
+    for idx, row in test_data.iterrows():
+        result = analyze_email(row, idx)
+        analysis_rows.append(result)
+        pbar.update(1)
+
+# -------------------------------
+# 📊 Summarize & Write CSV
+# -------------------------------
+# Filter out any rows that had "AnalyzeFailed" or "AnalyzeException" if desired
+tested_rows = [r for r in analysis_rows if r["Correctness"] not in ("AnalyzeFailed", "AnalyzeException", "ERROR")]
+
+total_tested = len(tested_rows)
+correct_classifications = sum(1 for r in tested_rows if r["Correctness"] == "Correct")
+false_positives = sum(1 for r in tested_rows if r["Correctness"] == "FalsePositive")
+false_negatives = sum(1 for r in tested_rows if r["Correctness"] == "FalseNegative")
+
+# Confidence counts
+high_confidence = sum(1 for r in tested_rows if r["Confidence"] == "High")
+medium_confidence = sum(1 for r in tested_rows if r["Confidence"] == "Medium")
+low_confidence = sum(1 for r in tested_rows if r["Confidence"] == "Low")
+
+# Similarity scores
+phish_sims = [r["PhishSim"] for r in tested_rows if r["PhishSim"] is not None]
+legit_sims = [r["LegitSim"] for r in tested_rows if r["LegitSim"] is not None]
+
+# Calculate final metrics
+if total_tested > 0:
+    accuracy = (correct_classifications / total_tested) * 100
+    false_positive_rate = (false_positives / total_tested) * 100
+    false_negative_rate = (false_negatives / total_tested) * 100
+    high_confidence_rate = (high_confidence / total_tested) * 100
+    medium_confidence_rate = (medium_confidence / total_tested) * 100
+    low_confidence_rate = (low_confidence / total_tested) * 100
+
+    print("\n📊 Test Summary:")
+    print(f"Total Emails Tested: {total_tested}")
+    print(f"Correct Classifications: {correct_classifications} ({accuracy:.2f}%)")
+    print(f"False Positives: {false_positives} ({false_positive_rate:.2f}%)")
+    print(f"False Negatives: {false_negatives} ({false_negative_rate:.2f}%)")
+
+    print("\n🔍 Confidence Level Breakdown:")
+    print(f"High Confidence: {high_confidence} ({high_confidence_rate:.2f}%)")
+    print(f"Medium Confidence: {medium_confidence} ({medium_confidence_rate:.2f}%)")
+    print(f"Low Confidence: {low_confidence} ({low_confidence_rate:.2f}%)")
+
+    if phish_sims and legit_sims:
+        avg_phish = sum(phish_sims) / len(phish_sims)
+        avg_legit = sum(legit_sims) / len(legit_sims)
+        print("\n🔎 Similarity Statistics:")
+        print(f"Avg PhishSim: {avg_phish:.3f}")
+        print(f"Avg LegitSim: {avg_legit:.3f}")
+else:
+    print("\n❌ No emails were tested or all failed analysis. Check dataset or API.")
+
+# -------------------------------
+# 📄 Write Detailed CSV
+# -------------------------------
+output_csv = "huggingface_test_results.csv"
+fieldnames = [
+    "EmailID",
+    "ExpectedType",
+    "PredictedType",
+    "PhishingScore",
+    "Confidence",
+    "PhishSim",
+    "LegitSim",
+    "Correctness"
+]
+
+with open(output_csv, mode="w", newline="", encoding="utf-8") as f:
+    writer = csv.DictWriter(f, fieldnames=fieldnames)
+    writer.writeheader()
+    for row in analysis_rows:
+        writer.writerow(row)
+
+print(f"\n✅ CSV results written to {output_csv}")
+print("\n✅ Script Execution Completed!")
+
+
+./test-enron_data_fraud_labeled.py
+import os
+import re
+import time
+import base64
+import requests
+import pandas as pd
+from tqdm import tqdm
+
+# -------------------------------
+# 📁 Setup File Paths
+# -------------------------------
+current_dir = os.path.dirname(os.path.abspath("__file__"))
+csv_file_path = os.path.join(current_dir, "dataset", "test_data-enron_data_fraud_labeled.csv")
+
+# -------------------------------
+# 📦 Load Dataset
+# -------------------------------
+try:
+    data = pd.read_csv(csv_file_path)
+    print(f"Dataset loaded successfully from: {csv_file_path}")
+except FileNotFoundError:
+    print(f"❌ CSV file not found at: {csv_file_path}")
+    exit(1)
+
+# -------------------------------
+# 📌 Helper Functions
+# -------------------------------
+def get_email_type(label):
+    return "phishing" if label == 1 else "legitimate"
+
+# -------------------------------
+# 🚀 Test Script Configuration
+# -------------------------------
+analyze_api_url = "http://localhost:5000/analyze"
+sample_size = 200  # Total number of random entries to test
+
+# -------------------------------
+# 🎯 Prepare Sample Data
+# -------------------------------
+spam_data = data[data["Label"] == 1]
+ham_data = data[data["Label"] == 0]
+
+spam_ratio = 0.3
+ham_ratio = 0.7
+
+spam_sample_size = int(sample_size * spam_ratio)
+ham_sample_size = sample_size - spam_sample_size
+
+if len(spam_data) < spam_sample_size or len(ham_data) < ham_sample_size:
+    print("⚠ Not enough spam or ham to meet the desired ratio.")
+    spam_sample_size = min(len(spam_data), spam_sample_size)
+    ham_sample_size = min(len(ham_data), ham_sample_size)
+
+spam_sample = spam_data.sample(n=spam_sample_size, random_state=int(time.time()))
+ham_sample = ham_data.sample(n=ham_sample_size, random_state=int(time.time()))
+
+sample_data = pd.concat([spam_sample, ham_sample]).sample(frac=1, random_state=int(time.time()))
+
+if len(sample_data) == 0:
+    print("⚠ No data available for testing after applying ratio-based sampling.")
+    exit(1)
+
+# -------------------------------
+# 🔍 Initialize Metrics
+# -------------------------------
+total_tested = 0
+correct_classifications = 0
+false_positives = 0
+false_negatives = 0
+
+spam_count = 0
+ham_count = 0
+
+high_confidence = 0
+medium_confidence = 0
+low_confidence = 0
+
+phish_sims = []
+legit_sims = []
+
+# -------------------------------
+# 🔍 Validate Each Email
+# -------------------------------
+for index, row in tqdm(sample_data.iterrows(), total=len(sample_data), desc="Analyzing", unit="emails"):
+    try:
+        email_body_raw = row["Body"] if pd.notna(row["Body"]) else ""
+        email_subject = row["Subject"] if pd.notna(row["Subject"]) else "No Subject"
+        email_sender = row["From"] if pd.notna(row["From"]) else "unknown@enron.com"
+        label_raw = row["Label"] if pd.notna(row["Label"]) else 0
+        expected_type = get_email_type(label_raw)
+
+        if expected_type == "phishing":
+            spam_count += 1
+        else:
+            ham_count += 1
+
+        encoded_body = base64.b64encode(email_body_raw.encode("utf-8")).decode("utf-8")
+        payload = {
+            "subject": email_subject,
+            "body": encoded_body,
+            "sender": email_sender
+        }
+
+        response = requests.post(analyze_api_url, json=payload)
+        response_data = response.json()
+
+        if response.status_code == 200:
+            total_tested += 1
+            confidence_level = response_data.get("confidence_level", "Unknown")
+
+            if confidence_level == "High":
+                high_confidence += 1
+            elif confidence_level == "Medium":
+                medium_confidence += 1
+            elif confidence_level == "Low":
+                low_confidence += 1
+
+            predicted_type = "phishing" if response_data["phishing_score"] >= 70 else "legitimate"
+
+            if predicted_type == expected_type:
+                correct_classifications += 1
+            elif predicted_type == "phishing" and expected_type == "legitimate":
+                false_positives += 1
+            elif predicted_type == "legitimate" and expected_type == "phishing":
+                false_negatives += 1
+
+            # Parse "PhishSim=..., LegitSim=..." from reasons (if present)
+            reasons_list = response_data.get("reasons", [])
+            for reason in reasons_list:
+                # Example reason: "PhishSim=0.34, LegitSim=0.02"
+                match = re.search(r"PhishSim=([\d.]+).+LegitSim=([\d.]+)", reason)
+                if match:
+                    ph_val = float(match.group(1))
+                    lg_val = float(match.group(2))
+                    phish_sims.append(ph_val)
+                    legit_sims.append(lg_val)
+
+        else:
+            print(f"❌ Error analyzing row {index}: status {response.status_code} - {response.text}")
+
+    except Exception as e:
+        print(f"❌ An error occurred at row {index}: {e}")
+
+# -------------------------------
+# 📊 Generate Final Report
+# -------------------------------
+if total_tested == 0:
+    print("\nNo emails were tested. Something might be wrong with the dataset or requests.")
+else:
+    accuracy = (correct_classifications / total_tested) * 100
+    false_positive_rate = (false_positives / total_tested) * 100
+    false_negative_rate = (false_negatives / total_tested) * 100
+
+    high_confidence_rate = (high_confidence / total_tested) * 100
+    medium_confidence_rate = (medium_confidence / total_tested) * 100
+    low_confidence_rate = (low_confidence / total_tested) * 100
+
+    print("\n📊 Test Summary:")
+    print(f"Total Emails Tested: {total_tested}")
+    print(f"Total Spam Emails Tested: {spam_count}")
+    print(f"Total Ham Emails Tested: {ham_count}")
+    print(f"Correct Classifications: {correct_classifications}")
+    print(f"False Positives: {false_positives} ({false_positive_rate:.2f}%)")
+    print(f"False Negatives: {false_negatives} ({false_negative_rate:.2f}%)")
+    print(f"Overall Accuracy: {accuracy:.2f}%")
+
+    print("\n🔍 Confidence Level Statistics:")
+    print(f"High Confidence: {high_confidence} ({high_confidence_rate:.2f}%)")
+    print(f"Medium Confidence: {medium_confidence} ({medium_confidence_rate:.2f}%)")
+    print(f"Low Confidence: {low_confidence} ({low_confidence_rate:.2f}%)")
+
+    # Additional stats about the "PhishSim" vs. "LegitSim" values
+    if phish_sims and legit_sims:
+        avg_phish = sum(phish_sims) / len(phish_sims)
+        avg_legit = sum(legit_sims) / len(legit_sims)
+        print("\n🔎 Similarity Statistics (from reasons):")
+        print(f"Average PhishSim: {avg_phish:.3f}")
+        print(f"Average LegitSim: {avg_legit:.3f}")
+        print(f"Data points counted: {len(phish_sims)}")
+    else:
+        print("\n🔎 No PhishSim/LegitSim data found in reasons.")
+
+
+./test-emls.py
+#!/usr/bin/env python3
+import os
+import csv
+import re
+import requests
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+# -------------------------------
+# ⚙️ API Endpoints
+# -------------------------------
+PARSE_EML_API_URL = os.getenv("PARSE_EML_API_URL", "http://localhost:5000/parse_eml")
+INSERT_API_URL    = os.getenv("INSERT_API_URL",    "http://localhost:5000/insert")
+ANALYZE_API_URL   = os.getenv("ANALYZE_API_URL",   "http://localhost:5000/analyze")
+
+# -------------------------------
+# 📁 Folder Paths
+# -------------------------------
+BASE_PATH = "./kaltenecker.m"
+SPAM_FOLDER = os.path.join(BASE_PATH, "spam")
+HAM_FOLDER  = os.path.join(BASE_PATH, "ham")
+
+# -------------------------------
+# 🔎 CSV + Analysis Storage
+# -------------------------------
+# We'll store each analysis result (one row per EML) here:
+analysis_results = []
+
+def parse_eml_file(file_path: str):
+    """
+    Calls the /parse_eml endpoint to parse raw EML into subject, body (base64), and sender.
+    Returns a dict: { "subject": ..., "body": ..., "sender": ... }
+    """
+    with open(file_path, "rb") as f:
+        resp = requests.post(PARSE_EML_API_URL, files={"file": f})
+    if resp.status_code != 200:
+        print(f"❌ Could not parse EML '{file_path}': {resp.text}")
+        return None
+
+    data = resp.json()
+    # data should look like: {"message": "Parsed EML", "email": {...}}
+    email_obj = data.get("email")
+    if not email_obj:
+        print(f"❌ Invalid parse response for '{file_path}': {resp.text}")
+        return None
+
+    return email_obj
+
+def insert_email(email_data: dict, email_type: str):
+    """
+    Calls /insert to store parsed email in Qdrant with label ('phishing' or 'legitimate').
+    email_data should have 'subject', 'body', 'sender'.
+    """
+    payload = {
+        "subject": email_data.get("subject", ""),
+        "body": email_data.get("body", ""),
+        "sender": email_data.get("sender", ""),
+        "type": email_type,
+    }
+    resp = requests.post(INSERT_API_URL, json=payload)
+    if resp.status_code != 200:
+        print(f"❌ Insert failed for '{payload['subject']}': {resp.text}")
+    else:
+        print(f"Inserted [{email_type}] => {payload['subject']}")
+
+def analyze_file(eml_data: dict, expected_type: str, filename: str):
+    """
+    Calls /analyze to check classification. Returns a dict with the info needed for CSV/report.
+    
+    - filename
+    - confidence_level (High/Medium/Low)
+    - phish_sim
+    - legit_sim
+    - predicted_type ("phishing" or "legitimate")
+    - expected_type
+    - correctness label ("Correct", "FalsePositive", or "FalseNegative")
+    """
+    payload = {
+        "subject": eml_data.get("subject", ""),
+        "body": eml_data.get("body", ""),
+        "sender": eml_data.get("sender", ""),
+    }
+
+    resp = requests.post(ANALYZE_API_URL, json=payload)
+    if resp.status_code != 200:
+        # Return a row with minimal info so we can track the error
+        return {
+            "filename": filename,
+            "confidence": "ERROR",
+            "PhishSim": None,
+            "LegitSim": None,
+            "ScanResult": "ERROR",
+            "ExpectedResult": expected_type,
+            "MisclassificationType": "AnalyzeFailed",
+        }
+
+    data = resp.json()
+    phishing_score = data.get("phishing_score", 0)
+    confidence_level = data.get("confidence_level", "Unknown")
+    reasons = data.get("reasons", [])
+
+    # Attempt to parse "PhishSim=xx, LegitSim=yy" from reasons
+    phish_sim = None
+    legit_sim = None
+    for reason in reasons:
+        match = re.search(r"PhishSim=([\d.]+).*LegitSim=([\d.]+)", reason)
+        if match:
+            phish_sim = float(match.group(1))
+            legit_sim = float(match.group(2))
+            break
+
+    # We'll label predicted as phishing if phishing_score >= 70
+    predicted_type = "phishing" if phishing_score >= 70 else "legitimate"
+
+    # Determine misclassification type
+    if predicted_type == expected_type:
+        misclass_type = "Correct"
+    elif predicted_type == "phishing" and expected_type == "legitimate":
+        misclass_type = "FalsePositive"
+    else:
+        misclass_type = "FalseNegative"
+
+    return {
+        "filename": filename,
+        "confidence": confidence_level,
+        "PhishSim": phish_sim,
+        "LegitSim": legit_sim,
+        "ScanResult": predicted_type,
+        "ExpectedResult": expected_type,
+        "MisclassificationType": misclass_type,
+    }
+
+def process_folder(folder_path: str, label: str, do_insert=True, do_analyze=False, max_analyze_workers=4):
+    """
+    1) For each EML file in folder_path:
+       - parse via /parse_eml
+       - insert via /insert (if do_insert=True)
+       - analyze via /analyze (if do_analyze=True), done in parallel
+    2) label is 'phishing' or 'legitimate'
+    """
+    if not os.path.isdir(folder_path):
+        print(f"❌ Folder not found: {folder_path}")
+        return
+
+    # Collect .eml files
+    files = [f for f in os.listdir(folder_path) if f.lower().endswith(".eml")]
+    print(f"Found {len(files)} EML files in {folder_path}")
+
+    # We'll parse + optionally insert sequentially, then do parallel analyze
+    analyze_tasks = []
+
+    for fname in files:
+        fpath = os.path.join(folder_path, fname)
+        eml_data = parse_eml_file(fpath)
+        if not eml_data:
+            continue  # skip if parse failed
+
+        # Insert step
+        if do_insert:
+            insert_email(eml_data, label)
+
+        # Prepare for analyze
+        if do_analyze:
+            analyze_tasks.append((eml_data, label, fname))
+
+    # Now we do concurrency for analyzing
+    if do_analyze and analyze_tasks:
+        with ThreadPoolExecutor(max_workers=max_analyze_workers) as executor:
+            futures = [executor.submit(analyze_file, eml, lbl, fn) for (eml, lbl, fn) in analyze_tasks]
+            for fut in as_completed(futures):
+                result = fut.result()
+                if result:
+                    analysis_results.append(result)
+
+def write_results_to_csv(rows, output_file="results.csv"):
+    """
+    Writes the analysis rows to a CSV file with the desired columns.
+    """
+    fieldnames = [
+        "filename",
+        "confidence",
+        "PhishSim",
+        "LegitSim",
+        "ScanResult",
+        "ExpectedResult",
+        "MisclassificationType"
+    ]
+    with open(output_file, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+    print(f"✅ Analysis results written to {output_file}")
+
+def main():
+    # -------------------------------
+    # 🚀 TRAIN STEP (Insert)
+    # -------------------------------
+    print("=== TRAIN PHASE: Importing EML files into the vector store ===")
+    # Insert spam as 'phishing'
+    process_folder(SPAM_FOLDER, label="phishing", do_insert=True, do_analyze=False)
+    # Insert ham as 'legitimate'
+    process_folder(HAM_FOLDER,  label="legitimate", do_insert=True, do_analyze=False)
+
+    # Wait a bit so batch upsert can finish (especially if there's a background queue)
+    print("Waiting 10 seconds for background upserts...")
+    time.sleep(10)
+
+    # -------------------------------
+    # 🛠️ TEST STEP (Analyze)
+    # -------------------------------
+    print("\n=== TEST PHASE: Checking model predictions on EML files ===")
+    process_folder(SPAM_FOLDER, label="phishing", do_insert=False, do_analyze=True, max_analyze_workers=4)
+    process_folder(HAM_FOLDER,  label="legitimate", do_insert=False, do_analyze=True, max_analyze_workers=4)
+
+    if not analysis_results:
+        print("\n❌ No emails analyzed. Check your EML directories.")
+        return
+
+    # -------------------------------
+    # 📊 Summarize + CSV
+    # -------------------------------
+    # 1) Write the results to CSV
+    write_results_to_csv(analysis_results, output_file="results.csv")
+
+    # 2) Calculate metrics
+    total_tested = len(analysis_results)
+    correct = sum(1 for r in analysis_results if r["MisclassificationType"] == "Correct")
+    false_pos = sum(1 for r in analysis_results if r["MisclassificationType"] == "FalsePositive")
+    false_neg = sum(1 for r in analysis_results if r["MisclassificationType"] == "FalseNegative")
+
+    # Confidence stats
+    high_conf = sum(1 for r in analysis_results if r["confidence"] == "High")
+    med_conf  = sum(1 for r in analysis_results if r["confidence"] == "Medium")
+    low_conf  = sum(1 for r in analysis_results if r["confidence"] == "Low")
+
+    accuracy = (correct / total_tested) * 100 if total_tested else 0
+    fp_rate  = (false_pos / total_tested) * 100 if total_tested else 0
+    fn_rate  = (false_neg / total_tested) * 100 if total_tested else 0
+    high_conf_rate = (high_conf / total_tested) * 100 if total_tested else 0
+    med_conf_rate  = (med_conf / total_tested) * 100 if total_tested else 0
+    low_conf_rate  = (low_conf / total_tested) * 100 if total_tested else 0
+
+    print("\n=== FINAL TEST REPORT ===")
+    print(f"Total EMLs Tested:           {total_tested}")
+    print(f"Correct Classifications:     {correct} ({accuracy:.2f}%)")
+    print(f"False Positives:            {false_pos} ({fp_rate:.2f}%)")
+    print(f"False Negatives:            {false_neg} ({fn_rate:.2f}%)")
+
+    print("\nConfidence-Level Breakdown:")
+    print(f"  - High Confidence:   {high_conf} ({high_conf_rate:.2f}%)")
+    print(f"  - Medium Confidence: {med_conf} ({med_conf_rate:.2f}%)")
+    print(f"  - Low Confidence:    {low_conf} ({low_conf_rate:.2f}%)")
+
+if __name__ == "__main__":
+    main()
+
+
+./download-enron_data_fraud_labeled.py
+print("")
+print("please go to https://www.kaggle.com/datasets/advaithsrao/enron-fraud-email-dataset?select=enron_data_fraud_labeled.csv")
+print("")
+print("and downlaod the file, unzip it and place the CSV file within the dataset folder")
+print("")
+print("")
+print("")
+# # Install dependencies as needed:
+# # pip install kagglehub[pandas-datasets]
+# import kagglehub
+# from kagglehub import KaggleDatasetAdapter
+# import os
+
+# # Set the path to the file you'd like to load
+# current_dir = os.path.dirname(os.path.abspath("__file__"))
+# csv_filename = os.path.join(current_dir, "dataset",  "enron_data_fraud_labeled.csv")
+# file_path = ".csv"  # Specify if needed, otherwise it will load the default dataset
+
+# # Load the latest version
+# df = kagglehub.load_dataset(
+#   KaggleDatasetAdapter.PANDAS,
+#   "advaithsrao/enron-fraud-email-dataset",
+#   file_path
+# )
+
+# # Save the dataset to a CSV file
+# df.to_csv(csv_filename, index=False)
+
+# print(f"Dataset saved as {csv_filename}")
+# print("First 5 records:", df.head())
+
+
+./import-enron_data_fraud_labeled.py
+import os
+import pandas as pd
+import base64
+import requests
+from tqdm import tqdm
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
+
+# -------------------------------
+# 📁 Setup File Paths
+# -------------------------------
+current_dir = os.path.dirname(os.path.abspath("__file__"))
+csv_file_path = os.path.join(current_dir, "dataset", "train_data-enron_data_fraud_labeled.csv")
+progress_file_path = os.path.join(current_dir, "dataset", "progress.txt")
+
+# -------------------------------
+# 📦 Load Dataset
+# -------------------------------
+data = pd.read_csv(csv_file_path)
+print("Dataset loaded successfully!")
+
+# -------------------------------
+# ⚙️ Reorder the Dataset (2 ham : 1 spam)
+# -------------------------------
+spam_data = data[data["Label"] == 1]
+ham_data = data[data["Label"] == 0]
+
+spam_idx = 0
+ham_idx = 0
+spam_count = len(spam_data)
+ham_count = len(ham_data)
+
+combined_rows = []
+
+# Interleave 2 ham + 1 spam until one category is exhausted
+while spam_idx < spam_count and ham_idx < ham_count:
+    # Take up to 2 ham (if available)
+    combined_rows.append(ham_data.iloc[ham_idx])
+    ham_idx += 1
+    if ham_idx < ham_count:
+        combined_rows.append(ham_data.iloc[ham_idx])
+        ham_idx += 1
+
+    # Take 1 spam (if available)
+    if spam_idx < spam_count:
+        combined_rows.append(spam_data.iloc[spam_idx])
+        spam_idx += 1
+
+# If any ham remains, add them
+while ham_idx < ham_count:
+    combined_rows.append(ham_data.iloc[ham_idx])
+    ham_idx += 1
+
+# If any spam remains, add them
+while spam_idx < spam_count:
+    combined_rows.append(spam_data.iloc[spam_idx])
+    spam_idx += 1
+
+# Build a new DataFrame in the desired 2:1 ratio order
+combined_df = pd.DataFrame(combined_rows, columns=data.columns)
+print("First 30 reordered rows:\n", combined_df.head(30)["Label"])
+
+# -------------------------------
+# 📌 Helper Functions
+# -------------------------------
+def get_email_type(label):
+    return "phishing" if label == 1 else "legitimate"
+
+def get_last_processed_index():
+    if os.path.exists(progress_file_path):
+        with open(progress_file_path, "r") as file:
+            return int(file.read().strip())
+    return 0
+
+# We'll use a lock to avoid race conditions when multiple threads write progress
+progress_lock = threading.Lock()
+global_progress = get_last_processed_index()
+
+def update_progress_if_higher(index):
+    global global_progress
+    with progress_lock:
+        if index > global_progress:
+            global_progress = index
+            with open(progress_file_path, "w") as file:
+                file.write(str(index))
+
+# -------------------------------
+# 🏭 Worker Function
+# -------------------------------
+def process_row(df_index, row, insert_api_url):
+    try:
+        email_body = row["Body"]
+        email_subject = row["Subject"] if pd.notna(row["Subject"]) else "No Subject"
+        email_sender = row["From"] if pd.notna(row["From"]) else "unknown@enron.com"
+        email_type = get_email_type(row["Label"])
+
+        # print(f"DEBUG: Submitting row {df_index}, label={email_type}, subject='{email_subject}'")
+
+        payload = {
+            "subject": email_subject,
+            "body": base64.b64encode(email_body.encode("utf-8")).decode("utf-8"),
+            "sender": email_sender,
+            "type": email_type
+        }
+
+        resp = requests.post(insert_api_url, json=payload)
+        if resp.status_code == 200:
+            return (df_index, True)
+        else:
+            print(f"❌ Error inserting row {df_index}: {resp.status_code} - {resp.text}")
+            return (df_index, False)
+
+    except Exception as e:
+        print(f"❌ Exception at row {df_index}: {e}")
+        return (df_index, False)
+
+# -------------------------------
+# 🚀 Process Rows in Parallel
+# -------------------------------
+insert_api_url = "http://localhost:5000/insert"
+start_index = global_progress
+total_rows = len(combined_df)
+print(f"Total re-ordered rows: {total_rows}")
+print(f"Resuming from re-ordered row index {start_index}...")
+
+rows_to_process = combined_df.iloc[start_index:].iterrows()
+
+with ThreadPoolExecutor(max_workers=1) as executor, \
+     tqdm(total=(total_rows - start_index), desc="Inserting", unit="rows") as pbar:
+
+    futures_map = {}
+    for df_index, row in rows_to_process:
+        future = executor.submit(process_row, df_index, row, insert_api_url)
+        futures_map[future] = df_index
+
+    for future in as_completed(futures_map):
+        df_index, success = future.result()
+        if success:
+            # increment the progress index
+            update_progress_if_higher(df_index + 1)
+        pbar.update(1)
+        pbar.refresh()
+
+print("\n✅ Import complete.")
+
+
+./test-notShrirang-email-spam-filter.py
+import os
+import time
+import base64
+import requests
+import pandas as pd
+import re
+import csv
+from tqdm import tqdm
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+# -------------------------------
+# 📁 Dataset Path (Hugging Face)
+# -------------------------------
+# https://huggingface.co/datasets/NotShrirang/email-spam-filter
+DATASET_PATH = "hf://datasets/NotShrirang/email-spam-filter/train.csv"
+
+# -------------------------------
+# ⚙️ API Endpoints
+# -------------------------------
+INSERT_API_URL = f"{os.getenv('API_URL', 'http://localhost:5000')}/insert"
+ANALYZE_API_URL = f"{os.getenv('API_URL', 'http://localhost:5000')}/analyze"
+
+# -------------------------------
+# 📦 Load and Split Dataset
+# -------------------------------
+print("Loading dataset...")
+df = pd.read_csv(DATASET_PATH)
+
+# Ensure correct column names
+df = df[['text', 'label_num']]
+df.rename(columns={'text': 'Text', 'label_num': 'Spam'}, inplace=True)
+
+# Separate spam and ham
+spam_emails = df[df['Spam'] == 1]
+ham_emails = df[df['Spam'] == 0]
+
+# Define split ratio (80% train, 20% test)
+train_spam = spam_emails.sample(frac=0.8, random_state=42)
+test_spam = spam_emails.drop(train_spam.index)
+train_ham = ham_emails.sample(frac=0.8, random_state=42)
+test_ham = ham_emails.drop(train_ham.index)
+
+# Combine train and test sets
+train_data = pd.concat([train_spam, train_ham]).sample(frac=1, random_state=42)
+test_data = pd.concat([test_spam, test_ham]).sample(frac=1, random_state=42)
+
+print(f"✅ Dataset split successfully! (Train: {len(train_data)}, Test: {len(test_data)})")
+
+# Count Spam and Ham in Test Set
+spam_count = test_data[test_data["Spam"] == 1].shape[0]
+ham_count = test_data[test_data["Spam"] == 0].shape[0]
+
+print("📊 Test Dataset Breakdown:")
+print(f"  - Spam Emails: {spam_count}")
+print(f"  - Non-Spam (Ham) Emails: {ham_count}\n")
+
+# -------------------------------
+# 📌 Helper Functions
+# -------------------------------
+def get_email_type(label):
+    """Convert label to readable email type."""
+    return "phishing" if label == 1 else "legitimate"
+
+def parse_email_text(text):
+    """
+    Extract a subject line if the first line starts with 'Subject:',
+    otherwise treat all as body.
+    """
+    lines = text.split('\n')
+    if lines and lines[0].startswith("Subject:"):
+        subject = lines[0].replace("Subject:", "").strip()
+        body = "\n".join(lines[1:]).strip()
+    else:
+        subject = ""
+        body = text.strip()
+    return subject, body
+
+def insert_email(row):
+    """
+    Prepare and send email data to /insert.
+    Return True if insertion succeeded, else False.
+    """
+    try:
+        subject, body = parse_email_text(row["Text"])
+        email_type = get_email_type(row["Spam"])
+
+        payload = {
+            "subject": subject,
+            "body": base64.b64encode(body.encode("utf-8")).decode("utf-8"),
+            "sender": "unknown@example.com",
+            "type": email_type
+        }
+
+        resp = requests.post(INSERT_API_URL, json=payload)
+        return resp.status_code == 200
+    except Exception as e:
+        print(f"❌ Exception inserting email: {e}")
+        return False
+
+def analyze_email(row, idx):
+    """
+    Sends the email to /analyze and collects:
+      - EmailID (index)
+      - ExpectedType
+      - PredictedType
+      - PhishingScore
+      - Confidence
+      - PhishSim / LegitSim (parsed from 'reasons')
+      - Correctness (Correct, FalsePositive, FalseNegative)
+    Returns a dict for CSV export & stats.
+    """
+    subject, body = parse_email_text(row["Text"])
+    expected_type = get_email_type(row["Spam"])
+
+    payload = {
+        "subject": subject,
+        "body": base64.b64encode(body.encode("utf-8")).decode("utf-8"),
+        "sender": "unknown@example.com"
+    }
+
+    try:
+        resp = requests.post(ANALYZE_API_URL, json=payload)
+        if resp.status_code != 200:
+            return {
+                "EmailID": idx,
+                "ExpectedType": expected_type,
+                "PredictedType": "ERROR",
+                "PhishingScore": None,
+                "Confidence": "ERROR",
+                "PhishSim": None,
+                "LegitSim": None,
+                "Correctness": "AnalyzeFailed"
+            }
+
+        data = resp.json()
+        phishing_score = data.get("phishing_score", 0)
+        confidence_level = data.get("confidence_level", "Unknown")
+        reasons = data.get("reasons", [])
+
+        # Extract "PhishSim=xx, LegitSim=yy" from reasons if present
+        phish_sim = None
+        legit_sim = None
+        for reason in reasons:
+            match = re.search(r"PhishSim=([\d.]+).*LegitSim=([\d.]+)", reason)
+            if match:
+                phish_sim = float(match.group(1))
+                legit_sim = float(match.group(2))
+                break
+
+        predicted_type = "phishing" if phishing_score >= 70 else "legitimate"
+
+        if predicted_type == expected_type:
+            correctness = "Correct"
+        elif predicted_type == "phishing" and expected_type == "legitimate":
+            correctness = "FalsePositive"
+        else:
+            correctness = "FalseNegative"
+
+        return {
+            "EmailID": idx,
+            "ExpectedType": expected_type,
+            "PredictedType": predicted_type,
+            "PhishingScore": phishing_score,
+            "Confidence": confidence_level,
+            "PhishSim": phish_sim,
+            "LegitSim": legit_sim,
+            "Correctness": correctness
+        }
+    except Exception as e:
+        print(f"❌ Error analyzing email idx={idx}: {e}")
+        return {
+            "EmailID": idx,
+            "ExpectedType": expected_type,
+            "PredictedType": "ERROR",
+            "PhishingScore": None,
+            "Confidence": "ERROR",
+            "PhishSim": None,
+            "LegitSim": None,
+            "Correctness": "AnalyzeException"
+        }
+
+# -------------------------------
+# 🚀 TRAIN (Insert) Emails
+# -------------------------------
+print(f"📤 Importing {len(train_data)} training emails into the API...")
+
+with ThreadPoolExecutor(max_workers=5) as executor, tqdm(total=len(train_data), desc="Importing", unit="emails") as pbar:
+    futures = [executor.submit(insert_email, row) for _, row in train_data.iterrows()]
+    for fut in as_completed(futures):
+        if fut.result():
+            pbar.update(1)
+
+print("\n✅ Training data import completed!")
+
+# -------------------------------
+# 🛠️ TEST (Analyze) the API
+# -------------------------------
+print(f"\n🔍 Testing {len(test_data)} emails...")
+time.sleep(3)
+
+analysis_rows = []
+with tqdm(total=len(test_data), desc="Testing", unit="emails") as pbar:
+    for idx, row in test_data.iterrows():
+        result_dict = analyze_email(row, idx)
+        analysis_rows.append(result_dict)
+        pbar.update(1)
+
+# -------------------------------
+# 📊 Summarize + CSV
+# -------------------------------
+# Filter out rows with "AnalyzeFailed" / "AnalyzeException" if you only want valid results
+valid_rows = [r for r in analysis_rows if r["Correctness"] not in ("AnalyzeFailed", "AnalyzeException")]
+
+total_tested = len(valid_rows)
+correct = sum(1 for r in valid_rows if r["Correctness"] == "Correct")
+false_positives = sum(1 for r in valid_rows if r["Correctness"] == "FalsePositive")
+false_negatives = sum(1 for r in valid_rows if r["Correctness"] == "FalseNegative")
+
+if total_tested == 0:
+    print("\n❌ No valid emails tested (or all failed). Check dataset or API.")
+else:
+    accuracy = (correct / total_tested) * 100
+    fp_rate = (false_positives / total_tested) * 100
+    fn_rate = (false_negatives / total_tested) * 100
+
+    print("\n📊 Test Summary:")
+    print(f"Total Emails Tested: {total_tested}")
+    print(f"Correct Classifications: {correct} ({accuracy:.2f}%)")
+    print(f"False Positives: {false_positives} ({fp_rate:.2f}%)")
+    print(f"False Negatives: {false_negatives} ({fn_rate:.2f}%)")
+
+# -------------------------------
+# 📝 Write Detailed CSV
+# -------------------------------
+output_csv = "shrirang_spam_filter_results.csv"
+fieldnames = [
+    "EmailID",
+    "ExpectedType",
+    "PredictedType",
+    "PhishingScore",
+    "Confidence",
+    "PhishSim",
+    "LegitSim",
+    "Correctness"
+]
+
+with open(output_csv, "w", newline="", encoding="utf-8") as f:
+    writer = csv.DictWriter(f, fieldnames=fieldnames)
+    writer.writeheader()
+    for row in analysis_rows:
+        writer.writerow(row)
+
+print(f"\n✅ CSV results written to {output_csv}")
+print("\n✅ Script Execution Completed!")
+
+
+./splitt-enron_data_fraud_labeled.py
+import os
+import pandas as pd
+from sklearn.model_selection import train_test_split
+
+# -------------------------------
+# 📁 Setup File Paths
+# -------------------------------
+current_dir = os.path.dirname(os.path.abspath("__file__"))  # Use os.getcwd() if running in Jupyter
+csv_file_path = os.path.join(current_dir, "dataset", "enron_data_fraud_labeled.csv")
+
+# -------------------------------
+# 📦 Load Dataset
+# -------------------------------
+data = pd.read_csv(csv_file_path)
+print(f"Dataset loaded successfully! {len(data)} rows found.")
+
+# -------------------------------
+# 📌 Ensure Data Integrity
+# -------------------------------
+# Check if required columns exist
+required_columns = {"Body", "Subject", "From", "Label"}
+if not required_columns.issubset(data.columns):
+    raise ValueError(f"Dataset is missing required columns: {required_columns - set(data.columns)}")
+
+# -------------------------------
+# 🔀 Shuffle the Data
+# -------------------------------
+data = data.sample(frac=1, random_state=42).reset_index(drop=True)  # Shuffle dataset
+
+# -------------------------------
+# 📊 Preserve Spam-to-Ham Ratio
+# -------------------------------
+train_data, test_data = train_test_split(
+    data,
+    test_size=0.2,  # 20% for testing
+    stratify=data["Label"],  # Maintain spam/ham ratio
+    random_state=42
+)
+
+# -------------------------------
+# 💾 Save Split Data
+# -------------------------------
+train_file_path = os.path.join(current_dir, "dataset", "train_data.csv")
+test_file_path = os.path.join(current_dir, "dataset", "test_data.csv")
+
+train_data.to_csv(train_file_path, index=False)
+test_data.to_csv(test_file_path, index=False)
+
+print(f"✅ Data split completed! Training set: {len(train_data)} rows, Test set: {len(test_data)} rows")
+print(f"📂 Train data saved to: {train_file_path}")
+print(f"📂 Test data saved to: {test_file_path}")
+
+

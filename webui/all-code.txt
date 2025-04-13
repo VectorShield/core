@@ -1,3 +1,4 @@
+./templates/index.html
 <!DOCTYPE html>
 <html>
 <head>
@@ -26,16 +27,10 @@
             <label>Reply To:</label>
             <input type="text" id="insert-reply_to" placeholder="replyto@example.com"/>
             
-            <!-- Updated dropdown with the new 7 sub-labels -->
-            <label>Type:</label>
+            <label>Type (phishing or legitimate):</label>
             <select id="insert-type">
-                <option value="transactional">transactional</option>
-                <option value="business">business</option>
-                <option value="newsletter">newsletter</option>
-                <option value="notification">notification</option>
-                <option value="marketing">marketing</option>
-                <option value="spam">spam</option>
-                <option value="bounced">bounced</option>
+                <option value="phishing">phishing</option>
+                <option value="legitimate">legitimate</option>
             </select>
             
             <label>Customer ID (optional):</label>
@@ -97,16 +92,10 @@
             </select>
 
             <div id="insert-options" style="display:none;">
-                <!-- Updated dropdown for Insert in EML workflow -->
                 <label>Insert as:</label>
                 <select id="insert-label">
-                    <option value="transactional">transactional</option>
-                    <option value="business">business</option>
-                    <option value="newsletter">newsletter</option>
-                    <option value="notification">notification</option>
-                    <option value="marketing">marketing</option>
-                    <option value="spam">spam</option>
-                    <option value="bounced">bounced</option>
+                    <option value="phishing">phishing</option>
+                    <option value="legitimate">legitimate</option>
                 </select>
             </div>
 
@@ -226,8 +215,7 @@
             const custId = document.getElementById('eml-customerId').value;
             const resultDiv = document.getElementById('eml-result');
             const isInsert = (action === 'insert');
-            // Insert label is now one of the 7 sub-labels
-            const insertLabel = isInsert ? document.getElementById('insert-label').value : null;
+            const insertLabel = (isInsert) ? document.getElementById('insert-label').value : null;
 
             if (!fileInput.files || fileInput.files.length === 0) {
                 resultDiv.innerText = "Please select an EML file first.";
@@ -260,7 +248,7 @@
                     endpoint = '/analyze';
                 } else if (action === 'insert') {
                     endpoint = '/insert';
-                    payload.type = insertLabel; // One of the 7 sub-labels
+                    payload.type = insertLabel; // "phishing" or "legitimate"
                 } else if (action === 'report_false_positive') {
                     endpoint = '/report_false_positive';
                 }
@@ -283,3 +271,153 @@
     </script>
 </body>
 </html>
+
+
+./static/style.css
+/* Basic resets and body styling */
+body {
+    font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+    margin: 0;
+    padding: 0;
+    background: #f9fafc;
+    color: #333;
+}
+
+/* Wrapper to center content and control max-width */
+.wrapper {
+    max-width: 900px;
+    margin: 40px auto;
+    padding: 0 20px;
+}
+
+/* Main heading + subtle description text */
+h1 {
+    text-align: center;
+    margin-bottom: 10px;
+}
+
+.api-info {
+    text-align: center;
+    color: #666;
+    margin-bottom: 40px;
+}
+
+/* Sections for each functionality */
+section {
+    margin-bottom: 40px;
+    padding: 20px;
+    border: 1px solid #ececec;
+    background: #fff;
+    border-radius: 5px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+}
+
+section h2 {
+    margin-top: 0;
+    margin-bottom: 15px;
+    color: #444;
+    font-size: 1.25em;
+}
+
+/* Labels and form elements */
+label {
+    display: block;
+    margin-top: 15px;
+    font-weight: 600;
+}
+
+input,
+select,
+button,
+textarea {
+    width: 100%;
+    max-width: 100%;
+    margin: 5px 0;
+    padding: 10px;
+    box-sizing: border-box;
+    font-size: 0.95em;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+}
+
+input:focus,
+textarea:focus,
+select:focus {
+    outline: none;
+    border-color: #7fa9ff;
+    box-shadow: 0 0 3px #cce1ff;
+}
+
+/* Buttons */
+button {
+    cursor: pointer;
+    background: #007bff;
+    color: #fff;
+    border: none;
+    font-weight: 600;
+    transition: background 0.3s ease;
+    border-radius: 4px;
+}
+
+button:hover {
+    background: #0056b3;
+}
+
+/* Result box */
+.result {
+    margin-top: 15px;
+    padding: 10px;
+    background: #eef;
+    border-left: 5px solid #007bff;
+    border-radius: 3px;
+    word-wrap: break-word;
+    white-space: pre-wrap; /* shows text with line breaks */
+}
+
+
+./web_ui.py
+import logging
+import os
+
+from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+
+# If your main API is at a different URL/port, set it here:
+API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:5000")
+
+# Create the FastAPI app for the UI
+app = FastAPI(title="Phishing Detection Web UI", version="1.0.0")
+
+# Set up logging
+LOG_LEVEL = "INFO"
+LOG_FORMAT = "[%(asctime)s] %(levelname)s %(name)s - %(message)s"
+logging.basicConfig(level=LOG_LEVEL, format=LOG_FORMAT)
+logger = logging.getLogger("web_ui")
+logger.setLevel(logging.INFO)
+
+# Mount the static directory for CSS, JS, images, etc.
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# Set up templates directory
+templates = Jinja2Templates(directory="templates")
+
+@app.get("/", response_class=HTMLResponse)
+def index(request: Request):
+    """
+    Render the main UI using a Jinja2 template.
+    """
+    return templates.TemplateResponse(
+        "index.html",
+        {
+            "request": request,
+            "api_base_url": API_BASE_URL
+        }
+    )
+
+
+##
+# uvicorn web_ui:app --host 0.0.0.0 --port 8000 --reload
+##
+

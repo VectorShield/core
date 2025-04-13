@@ -21,7 +21,9 @@ insert_api_url = "http://localhost:5000/insert"
 
 # Function to determine email type based on 'is_spam' value
 def get_email_type(is_spam):
-    return "phishing" if is_spam == 1 else "legitimate"
+    # Now map 1 => "spam", 0 => "business"
+    return "spam" if is_spam == 1 else "business"
+
 
 # Iterate over each row and send a POST request to the API
 for index, row in data.iterrows():

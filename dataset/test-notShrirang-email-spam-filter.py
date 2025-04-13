@@ -58,8 +58,8 @@ print(f"  - Non-Spam (Ham) Emails: {ham_count}\n")
 # 📌 Helper Functions
 # -------------------------------
 def get_email_type(label):
-    """Convert label to readable email type."""
-    return "phishing" if label == 1 else "legitimate"
+    return "spam" if label == 1 else "business"
+
 
 def parse_email_text(text):
     """

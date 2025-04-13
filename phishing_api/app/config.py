@@ -11,7 +11,8 @@ API_TITLE = "Phishing Detection API"
 API_VERSION = "1.0.0"
 
 # Qdrant
-QDRANT_URL = os.getenv("QDRANT_URL", "http://192.168.117.177:6333")
+#QDRANT_URL = os.getenv("QDRANT_URL", "http://192.168.117.177:6333")
+QDRANT_URL = os.getenv("QDRANT_URL", "http://192.168.1.167:6333")
 COLLECTION_NAME = "emails"
 
 # model
@@ -34,7 +35,7 @@ COLLECTION_NAME = "emails"
 # Avg PhishSim: 8.538
 # Avg LegitSim: 41.449
 
-MODEL_NAME = os.getenv("MODEL_NAME", "microsoft/all-MiniLM-L6-v2")
+MODEL_NAME = os.getenv("MODEL_NAME", "sentence-transformers/all-MiniLM-L6-v2")
 MODEL_PATH = os.getenv("MODEL_PATH", "models/all-MiniLM-L6-v2")
 MODEL_DIMENSION = int(os.getenv("MODEL_DIMENSION", "384"))
 # Total Emails Tested: 1865
@@ -69,5 +70,5 @@ MODEL_DIMENSION = int(os.getenv("MODEL_DIMENSION", "384"))
 # Avg LegitSim: 39.848
 
 # Batch Upsert
-BATCH_SIZE = 10
-FLUSH_INTERVAL = 5  # seconds
+BATCH_SIZE = 40
+FLUSH_INTERVAL = 10  # seconds

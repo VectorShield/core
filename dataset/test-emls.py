@@ -110,7 +110,9 @@ def analyze_file(eml_data: dict, expected_type: str, filename: str):
             break
 
     # We'll label predicted as phishing if phishing_score >= 70
-    predicted_type = "phishing" if phishing_score >= 70 else "legitimate"
+    predicted_type = "spam" if phishing_score >= 70 else "business"
+
+
 
     # Determine misclassification type
     if predicted_type == expected_type:
@@ -197,9 +199,9 @@ def main():
     # -------------------------------
     print("=== TRAIN PHASE: Importing EML files into the vector store ===")
     # Insert spam as 'phishing'
-    process_folder(SPAM_FOLDER, label="phishing", do_insert=True, do_analyze=False)
+    process_folder(SPAM_FOLDER, label="spam", do_insert=True, do_analyze=False)
     # Insert ham as 'legitimate'
-    process_folder(HAM_FOLDER,  label="legitimate", do_insert=True, do_analyze=False)
+    process_folder(HAM_FOLDER,  label="business", do_insert=True, do_analyze=False)
 
     # Wait a bit so batch upsert can finish (especially if there's a background queue)
     print("Waiting 10 seconds for background upserts...")

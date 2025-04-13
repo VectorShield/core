@@ -64,7 +64,8 @@ print("First 30 reordered rows:\n", combined_df.head(30)["Label"])
 # 📌 Helper Functions
 # -------------------------------
 def get_email_type(label):
-    return "phishing" if label == 1 else "legitimate"
+    return "spam" if label == 1 else "business"
+
 
 def get_last_processed_index():
     if os.path.exists(progress_file_path):

@@ -20,3 +20,4 @@ EXPOSE 8000
 
 # Use Gunicorn for better performance (adjust workers as needed)
 ENTRYPOINT ["uvicorn", "web_ui:app", "--host", "0.0.0.0", "--port", "8000"]
+# uvicorn web_ui:app --host 0.0.0.0 --port 8000

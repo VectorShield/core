@@ -17,7 +17,9 @@ analyze_api_url = "http://localhost:5000/analyze"
 
 # Function to determine email type based on 'is_spam' value
 def get_expected_label(is_spam):
-    return "phishing" if is_spam == 1 else "legitimate"
+    # Now map 1 => "spam", 0 => "business"
+    return "spam" if is_spam == 1 else "business"
+
 
 # Variables to track results
 total_emails = 0
@@ -45,7 +47,7 @@ for index, row in data.iterrows():
 
     if response.status_code == 200:
         result = response.json()
-        predicted_label = "phishing" if result["phishing_score"] >= 70 else "legitimate"
+        predicted_label = "spam" if result["phishing_score"] >= 70 else "business"
         
         # Check if the prediction matches the expected label
         is_correct = (predicted_label == expected_label)

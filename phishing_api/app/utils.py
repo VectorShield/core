@@ -102,6 +102,8 @@ async def extract_email_features(email: EmailRequest):
 
     return feats
 
+# ./app/utils.py
+
 async def parse_raw_eml(eml_bytes: bytes):
     """
     Parse a raw EML file asynchronously.
@@ -112,8 +114,16 @@ async def parse_raw_eml(eml_bytes: bytes):
     sender = msg["from"] or "Unknown Sender"
     body_str = await extract_eml_body(msg)
 
+    # Optional: Strict Check
+    # If we detect an obviously invalid EML or "junk" content, raise an error.
+    # For instance, say we want to ensure the sender is not "Unknown Sender" 
+    # AND the body has at least some non-whitespace text:
+    if sender == "Unknown Sender":
+        raise ValueError("Invalid EML content – missing sender and body text.")
+
     return {
         "subject": subject,
         "body": base64.b64encode(body_str.encode("utf-8")).decode("utf-8"),
         "sender": sender
     }
+

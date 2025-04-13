@@ -13,11 +13,10 @@ async def parse_eml(file: UploadFile = File(...)):
     """
     try:
         eml_bytes = await file.read()
-        # IMPORTANT: await the parse_raw_eml call
         parsed_email = await parse_raw_eml(eml_bytes)
         
         return {"message": "Parsed EML", "email": parsed_email}
     except Exception as e:
         logger.error(f"Failed to parse EML: {e}")
+       # We raise an HTTPException(400) if we consider it invalid
         raise HTTPException(status_code=400, detail=f"Failed to parse EML: {e}")
-

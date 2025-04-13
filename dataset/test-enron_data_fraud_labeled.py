@@ -26,7 +26,8 @@ except FileNotFoundError:
 # 📌 Helper Functions
 # -------------------------------
 def get_email_type(label):
-    return "phishing" if label == 1 else "legitimate"
+    return "spam" if label == 1 else "business"
+
 
 # -------------------------------
 # 🚀 Test Script Configuration
@@ -115,7 +116,7 @@ for index, row in tqdm(sample_data.iterrows(), total=len(sample_data), desc="Ana
             elif confidence_level == "Low":
                 low_confidence += 1
 
-            predicted_type = "phishing" if response_data["phishing_score"] >= 70 else "legitimate"
+            predicted_type = "spam" if response_data["phishing_score"] >= 70 else "business"
 
             if predicted_type == expected_type:
                 correct_classifications += 1

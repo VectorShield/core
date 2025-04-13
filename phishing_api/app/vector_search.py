@@ -85,31 +85,65 @@ def sync_get_cached_embedding(text: str):
     # Return the embedding as a list of floats
     return output.squeeze().tolist()
 
-async def store_email(email: EmailRequest, label: str, batch_queue) -> str:
-    """Queues email for batch upsert in Qdrant."""
+async def store_email(
+    email: EmailRequest, 
+    label: str,               # "good" or "bad"
+    sub_label: str,           # e.g. "spam", "transactional", ...
+    batch_queue
+) -> str:
+    """
+    Queues email for batch upsert in Qdrant.
+    'label' is the main_label ('good' or 'bad'),
+    'sub_label' is the finer classification ('spam', 'transactional', etc.).
+    """
     feats = await extract_email_features(email)
     if not isinstance(feats, dict):
         raise TypeError(f"extract_email_features returned {type(feats)}, expected dict")
 
-    feats["label"] = label
-    email_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, feats["email_hash"] + label))
+    # Store both labels:
+    feats["label"] = label           # main label, e.g. "good" or "bad"
+    feats["sub_label"] = sub_label   # finer label, e.g. "spam", "transactional"
+
+    # We build a stable UUID using the email_hash plus the label combination
+    import uuid
+    email_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, feats["email_hash"] + label + sub_label))
+
     full_body_str = feats.pop("_full_body_for_embedding", None)
 
     if full_body_str:
         vector_embedding = create_aggregated_embedding(full_body_str)
     else:
+        # fallback: just embed the subject + preview
         fallback_text = f"{feats['subject']} {feats['body_preview']}"
         vector_embedding = await get_cached_embedding(fallback_text)
 
-    batch_queue.append(PointStruct(id=email_id, vector=vector_embedding, payload=feats))
-    logger.info(f"📥 Queued {label} email: {feats['subject']} (ID={email_id})")
-    return f"✅ Queued {label} email: {feats['subject']}"
+    # Add the data to the queue
+    from qdrant_client.http.models import PointStruct
+    batch_queue.append(
+        PointStruct(
+            id=email_id,
+            vector=vector_embedding,
+            payload=feats
+        )
+    )
+
+    logger.info(f"📥 Queued {label.upper()} email [{sub_label}]: {feats['subject']} (ID={email_id})")
+    return f"✅ Queued {label.upper()} email [{sub_label}]: {feats['subject']}"
 
 async def check_email_similarity(email_feats: dict):
-    """Retrieve nearest neighbors and compute phishing score."""
+    """
+    Retrieve nearest neighbors from Qdrant and compute a 'bad_score' percentage
+    (like the old phishing_score). The final label is 'bad' if >= 50%, otherwise 'good'.
+    """
     try:
         full_body = email_feats.pop("_full_body_for_embedding", None)
-        vector_embedding = create_aggregated_embedding(full_body) if full_body and full_body.strip() else embed_text(f"{email_feats.get('subject','')} {email_feats.get('body_preview','')}").tolist()
+        if full_body and full_body.strip():
+            vector_embedding = create_aggregated_embedding(full_body)
+        else:
+            # fallback
+            vector_embedding = embed_text(
+                f"{email_feats.get('subject','')} {email_feats.get('body_preview','')}"
+            ).tolist()
 
         results = await client.search(
             collection_name=COLLECTION_NAME,
@@ -118,26 +152,48 @@ async def check_email_similarity(email_feats: dict):
             score_threshold=0.01
         )
 
-        sum_phish_sim, sum_legit_sim = 0.0, 0.0
+        # Sum up scores for 'good' vs 'bad'
+        sum_good_sim = 0.0
+        sum_bad_sim = 0.0
+
+        # Optionally keep track of the single best match for sub_label
+        top_match_label = None
+        top_match_sub_label = None
+        top_match_score = -999.0
+
         for r in results:
             sim = r.score
-            lbl = r.payload.get("label", "unknown")
-            if lbl == "phishing":
-                sum_phish_sim += sim
-            elif lbl == "legitimate":
-                sum_legit_sim += sim
+            lbl = r.payload.get("label", "unknown")      # "good" or "bad"
+            sbl = r.payload.get("sub_label", "unknown")  # e.g. "spam", "business"
+            if sim > top_match_score:
+                top_match_score = sim
+                top_match_label = lbl
+                top_match_sub_label = sbl
 
-        phish_prob = sum_phish_sim / (sum_phish_sim + sum_legit_sim + 1e-7)
-        phishing_score = int(round(phish_prob * 100))
-        closest_label = "phishing" if phish_prob >= 0.5 else "legitimate"
-        reasons = [f"PhishSim={sum_phish_sim:.3f}, LegitSim={sum_legit_sim:.3f}"]
+            if lbl == "good":
+                sum_good_sim += sim
+            elif lbl == "bad":
+                sum_bad_sim += sim
 
-        if sum_phish_sim == 0.0 and sum_legit_sim == 0.0:
-            reasons.append("No nearest neighbors labeled phishing or legitimate found.")
-        elif abs(sum_phish_sim - sum_legit_sim) < 0.01:
-            reasons.append("Phishing vs. legitimate similarity is nearly identical.")
+        # Compute "bad" probability
+        bad_prob = sum_bad_sim / (sum_bad_sim + sum_good_sim + 1e-7)
+        bad_score = int(round(bad_prob * 100))
+        closest_label = "bad" if bad_prob >= 0.5 else "good"
 
-        return phishing_score, reasons, closest_label
+        reasons = [
+            f"sum_good_sim={sum_good_sim:.3f}",
+            f"sum_bad_sim={sum_bad_sim:.3f}",
+        ]
+        if top_match_label is not None:
+            reasons.append(f"Top match => {top_match_label}, sub_label={top_match_sub_label}")
+
+        # If we have no matches at all
+        if sum_good_sim == 0.0 and sum_bad_sim == 0.0:
+            reasons.append("No nearest neighbors labeled 'good' or 'bad' found.")
+
+        return bad_score, reasons, closest_label
+
     except Exception as e:
         logger.error(f"❌ Qdrant search failed: {e}")
-        return 0, ["Error searching Qdrant"], "Unknown"
+        return 0, [f"Error searching Qdrant: {e}"], "Unknown"
+
