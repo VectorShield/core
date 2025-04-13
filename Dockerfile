@@ -11,16 +11,16 @@ RUN python -c "from sentence_transformers import SentenceTransformer; \
     model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2'); \
     model.save('/model/all-MiniLM-L6-v2')"
 
-RUN python -c "from sentence_transformers import SentenceTransformer; \
-    model = SentenceTransformer('Intel/dynamic_tinybert'); \
-    model.save('/model/dynamic_tinybert')"
+# RUN python -c "from sentence_transformers import SentenceTransformer; \
+#     model = SentenceTransformer('Intel/dynamic_tinybert'); \
+#     model.save('/model/dynamic_tinybert')"
 
-RUN python -c "from sentence_transformers import SentenceTransformer; \
-    from transformers import AutoModel, AutoTokenizer, DebertaV2Tokenizer; \
-    tokenizer = DebertaV2Tokenizer.from_pretrained('microsoft/deberta-v3-base'); \
-    model = AutoModel.from_pretrained('microsoft/deberta-v3-base'); \
-    model.save_pretrained('/model/deberta-v3-base'); \
-    tokenizer.save_pretrained('/model/deberta-v3-base')"
+# RUN python -c "from sentence_transformers import SentenceTransformer; \
+#     from transformers import AutoModel, AutoTokenizer, DebertaV2Tokenizer; \
+#     tokenizer = DebertaV2Tokenizer.from_pretrained('microsoft/deberta-v3-base'); \
+#     model = AutoModel.from_pretrained('microsoft/deberta-v3-base'); \
+#     model.save_pretrained('/model/deberta-v3-base'); \
+#     tokenizer.save_pretrained('/model/deberta-v3-base')"
 
 # 🔹 Stage 2: Build Final Application Image
 FROM python:3.12-slim
