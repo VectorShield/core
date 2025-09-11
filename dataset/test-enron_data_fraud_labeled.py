@@ -72,9 +72,11 @@ false_negatives = 0
 spam_count = 0
 ham_count = 0
 
+very_high_confidence = 0
 high_confidence = 0
 medium_confidence = 0
 low_confidence = 0
+very_low_confidence = 0
 
 phish_sims = []
 legit_sims = []
@@ -90,7 +92,7 @@ for index, row in tqdm(sample_data.iterrows(), total=len(sample_data), desc="Ana
         label_raw = row["Label"] if pd.notna(row["Label"]) else 0
         expected_type = get_email_type(label_raw)
 
-        if expected_type == "phishing":
+        if expected_type == "spam":
             spam_count += 1
         else:
             ham_count += 1
@@ -109,32 +111,37 @@ for index, row in tqdm(sample_data.iterrows(), total=len(sample_data), desc="Ana
             total_tested += 1
             confidence_level = response_data.get("confidence_level", "Unknown")
 
-            if confidence_level == "High":
+            if confidence_level == "Very High":
+                very_high_confidence += 1
+            elif confidence_level == "High":
                 high_confidence += 1
             elif confidence_level == "Medium":
                 medium_confidence += 1
             elif confidence_level == "Low":
                 low_confidence += 1
+            elif confidence_level == "Very Low":
+                very_low_confidence += 1
 
-            predicted_type = "spam" if response_data["phishing_score"] >= 70 else "business"
+            # Use threshold from config (60%) converted to score
+            predicted_type = "spam" if response_data["phishing_score"] >= 60 else "business"
 
             if predicted_type == expected_type:
                 correct_classifications += 1
-            elif predicted_type == "phishing" and expected_type == "legitimate":
+            elif predicted_type == "spam" and expected_type == "business":
                 false_positives += 1
-            elif predicted_type == "legitimate" and expected_type == "phishing":
+            elif predicted_type == "business" and expected_type == "spam":
                 false_negatives += 1
 
-            # Parse "PhishSim=..., LegitSim=..." from reasons (if present)
+            # Parse "sum_bad_sim=..., sum_good_sim=..." from reasons (if present)
             reasons_list = response_data.get("reasons", [])
             for reason in reasons_list:
-                # Example reason: "PhishSim=0.34, LegitSim=0.02"
-                match = re.search(r"PhishSim=([\d.]+).+LegitSim=([\d.]+)", reason)
-                if match:
-                    ph_val = float(match.group(1))
-                    lg_val = float(match.group(2))
-                    phish_sims.append(ph_val)
-                    legit_sims.append(lg_val)
+                # Example reason: "sum_good_sim=3.22" or "sum_bad_sim=11.44"
+                bad_match = re.search(r"sum_bad_sim=([\d.]+)", reason)
+                good_match = re.search(r"sum_good_sim=([\d.]+)", reason)
+                if bad_match:
+                    phish_sims.append(float(bad_match.group(1)))
+                if good_match:
+                    legit_sims.append(float(good_match.group(1)))
 
         else:
             print(f"❌ Error analyzing row {index}: status {response.status_code} - {response.text}")
@@ -152,9 +159,11 @@ else:
     false_positive_rate = (false_positives / total_tested) * 100
     false_negative_rate = (false_negatives / total_tested) * 100
 
+    very_high_confidence_rate = (very_high_confidence / total_tested) * 100
     high_confidence_rate = (high_confidence / total_tested) * 100
     medium_confidence_rate = (medium_confidence / total_tested) * 100
     low_confidence_rate = (low_confidence / total_tested) * 100
+    very_low_confidence_rate = (very_low_confidence / total_tested) * 100
 
     print("\n📊 Test Summary:")
     print(f"Total Emails Tested: {total_tested}")
@@ -166,17 +175,19 @@ else:
     print(f"Overall Accuracy: {accuracy:.2f}%")
 
     print("\n🔍 Confidence Level Statistics:")
+    print(f"Very High Confidence: {very_high_confidence} ({very_high_confidence_rate:.2f}%)")
     print(f"High Confidence: {high_confidence} ({high_confidence_rate:.2f}%)")
     print(f"Medium Confidence: {medium_confidence} ({medium_confidence_rate:.2f}%)")
     print(f"Low Confidence: {low_confidence} ({low_confidence_rate:.2f}%)")
+    print(f"Very Low Confidence: {very_low_confidence} ({very_low_confidence_rate:.2f}%)")
 
-    # Additional stats about the "PhishSim" vs. "LegitSim" values
+    # Additional stats about the similarity values
     if phish_sims and legit_sims:
-        avg_phish = sum(phish_sims) / len(phish_sims)
-        avg_legit = sum(legit_sims) / len(legit_sims)
+        avg_bad_sim = sum(phish_sims) / len(phish_sims)
+        avg_good_sim = sum(legit_sims) / len(legit_sims)
         print("\n🔎 Similarity Statistics (from reasons):")
-        print(f"Average PhishSim: {avg_phish:.3f}")
-        print(f"Average LegitSim: {avg_legit:.3f}")
+        print(f"Average Bad Similarity: {avg_bad_sim:.3f}")
+        print(f"Average Good Similarity: {avg_good_sim:.3f}")
         print(f"Data points counted: {len(phish_sims)}")
     else:
-        print("\n🔎 No PhishSim/LegitSim data found in reasons.")
+        print("\n🔎 No similarity data found in reasons.")

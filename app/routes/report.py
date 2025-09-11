@@ -6,7 +6,7 @@ from ..models import EmailRequest
 from ..database import client
 from ..utils import extract_email_features
 from ..config import COLLECTION_NAME
-from ..vector_search import create_aggregated_embedding, embed_text
+from ..vector_search import create_aggregated_embedding, embed_text_cached
 
 logger = logging.getLogger("phishing_api")
 
@@ -30,7 +30,7 @@ async def report_false_positive(email: EmailRequest):
     else:
         # minimal fallback text
         fallback_text = f"{feats.get('subject','')} {feats.get('body_preview','')}"
-        embedding = embed_text(fallback_text).tolist()  # single-pass embedding
+        embedding = embed_text_cached(fallback_text)  # single-pass embedding with caching
 
     # 3) Build an optional filter based on customerId
     filt = None

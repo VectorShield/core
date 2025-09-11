@@ -4,6 +4,9 @@ import os
 import asyncio
 import torch
 import numpy as np
+import hashlib
+from functools import lru_cache
+from typing import List, Dict, Optional
 from transformers import AutoModel, AutoTokenizer, DebertaV2Tokenizer
 from qdrant_client.http.models import Filter, FieldCondition, MatchValue, PointStruct
 from .database import client
@@ -19,6 +22,17 @@ logger = logging.getLogger("phishing_api")
 # Detect GPU
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 logger.info(f"Using device: {device}")
+
+# In-memory embedding cache (LRU cache with max 10000 entries)
+embedding_cache: Dict[str, List[float]] = {}
+CACHE_MAX_SIZE = 10000
+
+# Cache performance metrics
+cache_stats = {
+    "hits": 0,
+    "misses": 0,
+    "total_requests": 0
+}
 
 # Ensure the correct tokenizer is used for DeBERTa
 TokenizerClass = DebertaV2Tokenizer if "deberta" in MODEL_NAME.lower() else AutoTokenizer
@@ -39,51 +53,196 @@ else:
 # Ensure model is in evaluation mode
 model.eval()
 
-def chunk_text(text: str, chunk_size=256, overlap=50) -> list[str]:
-    """Splits text into chunks with optional overlap."""
+def _get_cache_key(text: str) -> str:
+    """Generate a cache key for text."""
+    return hashlib.md5(text.encode('utf-8')).hexdigest()
+
+def _manage_cache_size():
+    """Remove oldest entries if cache exceeds max size."""
+    if len(embedding_cache) > CACHE_MAX_SIZE:
+        # Remove 20% of entries to avoid frequent cache management
+        remove_count = len(embedding_cache) // 5
+        keys_to_remove = list(embedding_cache.keys())[:remove_count]
+        for key in keys_to_remove:
+            del embedding_cache[key]
+        
+        # Log cache performance
+        hit_rate = cache_stats["hits"] / max(cache_stats["total_requests"], 1) * 100
+        logger.info(f"Cache cleaned: removed {remove_count} entries. "
+                   f"Cache hit rate: {hit_rate:.1f}% ({cache_stats['hits']}/{cache_stats['total_requests']})")
+
+def get_cache_performance() -> Dict[str, float]:
+    """Get cache performance statistics."""
+    total_requests = cache_stats["total_requests"]
+    if total_requests == 0:
+        return {"hit_rate": 0.0, "size": len(embedding_cache), "total_requests": 0}
+    
+    hit_rate = (cache_stats["hits"] / total_requests) * 100
+    return {
+        "hit_rate": hit_rate,
+        "size": len(embedding_cache),
+        "total_requests": total_requests,
+        "hits": cache_stats["hits"],
+        "misses": cache_stats["misses"]
+    }
+
+def chunk_text_intelligent(text: str, max_tokens=384) -> List[str]:
+    """
+    Intelligently chunk text based on sentences and token limits.
+    More efficient than fixed character chunking.
+    """
+    if not text or len(text.strip()) == 0:
+        return [""]
+    
+    # For short texts, return as single chunk
+    if len(text) <= max_tokens:
+        return [text]
+    
+    # Split by sentences first
+    import re
+    sentences = re.split(r'[.!?]+', text)
     chunks = []
-    start = 0
-    while start < len(text):
-        end = start + chunk_size
-        chunk = text[start:end]
-        chunks.append(chunk)
-        start += (chunk_size - overlap)
-    return chunks
+    current_chunk = ""
+    
+    for sentence in sentences:
+        sentence = sentence.strip()
+        if not sentence:
+            continue
+            
+        # If adding this sentence would exceed limit, start new chunk
+        if len(current_chunk) + len(sentence) > max_tokens:
+            if current_chunk:
+                chunks.append(current_chunk.strip())
+            current_chunk = sentence
+        else:
+            current_chunk += " " + sentence if current_chunk else sentence
+    
+    # Add the last chunk
+    if current_chunk.strip():
+        chunks.append(current_chunk.strip())
+    
+    return chunks if chunks else [text[:max_tokens]]
 
-def embed_text(text: str) -> torch.Tensor:
-    """Embed a single string using the model."""
-    inputs = tokenizer(text, return_tensors="pt", padding=True, truncation=True).to(device)
+def embed_text_cached(text: str) -> List[float]:
+    """Embed text with caching support."""
+    cache_stats["total_requests"] += 1
+    
+    if not text or not text.strip():
+        return [0.0] * model.config.hidden_size
+    
+    cache_key = _get_cache_key(text)
+    
+    # Check cache first
+    if cache_key in embedding_cache:
+        cache_stats["hits"] += 1
+        return embedding_cache[cache_key]
+    
+    cache_stats["misses"] += 1
+    
+    # Generate embedding
+    inputs = tokenizer(text, return_tensors="pt", padding=True, truncation=True, max_length=512).to(device)
     with torch.no_grad():
-        output = model(**inputs).last_hidden_state[:, 0, :].to("cpu")  # Move back to CPU
-    return output.squeeze(0)
+        output = model(**inputs).last_hidden_state[:, 0, :].cpu()
+    
+    embedding = output.squeeze(0).tolist()
+    
+    # Cache the result
+    embedding_cache[cache_key] = embedding
+    _manage_cache_size()
+    
+    return embedding
 
-def create_aggregated_embedding(full_text: str) -> list[float]:
-    """Generate an average embedding over text chunks."""
-    chunks = chunk_text(full_text, chunk_size=256, overlap=50)
-    embeddings = [embed_text(c) for c in chunks if c.strip()]
+def embed_texts_batch(texts: List[str], batch_size: int = 8) -> List[List[float]]:
+    """
+    Batch embed multiple texts for better GPU utilization.
+    Returns list of embeddings in same order as input texts.
+    """
+    if not texts:
+        return []
+    
+    embeddings = []
+    cached_results = {}
+    texts_to_embed = []
+    indices_to_embed = []
+    
+    # Check cache for each text
+    for i, text in enumerate(texts):
+        if not text or not text.strip():
+            cached_results[i] = [0.0] * model.config.hidden_size
+            continue
+            
+        cache_key = _get_cache_key(text)
+        if cache_key in embedding_cache:
+            cached_results[i] = embedding_cache[cache_key]
+        else:
+            texts_to_embed.append(text)
+            indices_to_embed.append(i)
+    
+    # Batch embed uncached texts
+    if texts_to_embed:
+        for i in range(0, len(texts_to_embed), batch_size):
+            batch_texts = texts_to_embed[i:i + batch_size]
+            batch_indices = indices_to_embed[i:i + batch_size]
+            
+            # Tokenize batch
+            inputs = tokenizer(
+                batch_texts, 
+                return_tensors="pt", 
+                padding=True, 
+                truncation=True, 
+                max_length=512
+            ).to(device)
+            
+            with torch.no_grad():
+                outputs = model(**inputs).last_hidden_state[:, 0, :].cpu()
+            
+            # Store results
+            for j, idx in enumerate(batch_indices):
+                embedding = outputs[j].tolist()
+                cached_results[idx] = embedding
+                
+                # Cache the result
+                cache_key = _get_cache_key(texts_to_embed[i + j])
+                embedding_cache[cache_key] = embedding
+    
+    # Reconstruct embeddings in original order
+    embeddings = [cached_results[i] for i in range(len(texts))]
+    _manage_cache_size()
+    
+    return embeddings
+
+def create_aggregated_embedding(full_text: str) -> List[float]:
+    """Generate an optimized average embedding over intelligent text chunks."""
+    if not full_text or not full_text.strip():
+        return [0.0] * model.config.hidden_size
+    
+    # Use intelligent chunking
+    chunks = chunk_text_intelligent(full_text, max_tokens=400)
+    
+    # Use batch embedding for efficiency
+    embeddings = embed_texts_batch(chunks)
     
     if not embeddings:
-        return embed_text("").tolist()
+        return [0.0] * model.config.hidden_size
     
-    avg_embedding = torch.mean(torch.stack(embeddings), dim=0)  # Average over all chunks
-    return avg_embedding.tolist()
+    # Calculate weighted average (longer chunks get more weight)
+    total_weight = 0
+    weighted_embedding = np.zeros(len(embeddings[0]))
+    
+    for i, chunk in enumerate(chunks):
+        weight = len(chunk.strip())  # Weight by text length
+        if weight > 0:
+            weighted_embedding += np.array(embeddings[i]) * weight
+            total_weight += weight
+    
+    if total_weight > 0:
+        weighted_embedding /= total_weight
+    
+    return weighted_embedding.tolist()
 
-async def get_cached_embedding(text: str):
-    """Async wrapper for embedding generation."""
-    return await asyncio.to_thread(sync_get_cached_embedding, text)
-
-def sync_get_cached_embedding(text: str):
-    """Synchronous embedding generation with comments."""
-
-    # Tokenize the input text
-    inputs = tokenizer(text, return_tensors="pt", padding=True, truncation=True).to(device)
-
-    # Generate embeddings using the model while ensuring gradients are not computed
-    with torch.no_grad():
-        output = model(**inputs).last_hidden_state[:, 0, :].to("cpu")
-
-    # Return the embedding as a list of floats
-    return output.squeeze().tolist()
+async def get_cached_embedding(text: str) -> List[float]:
+    """Async wrapper for cached embedding generation."""
+    return await asyncio.to_thread(embed_text_cached, text)
 
 async def store_email(
     email: EmailRequest, 
@@ -140,56 +299,108 @@ async def check_email_similarity(email_feats: dict):
         if full_body and full_body.strip():
             vector_embedding = create_aggregated_embedding(full_body)
         else:
-            # fallback
-            vector_embedding = embed_text(
-                f"{email_feats.get('subject','')} {email_feats.get('body_preview','')}"
-            ).tolist()
+            # fallback to cached embedding
+            fallback_text = f"{email_feats.get('subject','')} {email_feats.get('body_preview','')}"
+            vector_embedding = embed_text_cached(fallback_text)
 
+        # Use adaptive limit based on available data
+        adaptive_limit = min(100, max(20, len(embedding_cache) // 100))
+        
         results = await client.search(
             collection_name=COLLECTION_NAME,
             query_vector=vector_embedding,
-            limit=50,
-            score_threshold=0.01
+            limit=adaptive_limit,
+            score_threshold=0.005  # Lower threshold to catch more subtle similarities
         )
 
-        # Sum up scores for 'good' vs 'bad'
-        sum_good_sim = 0.0
-        sum_bad_sim = 0.0
+        # Enhanced scoring with confidence weighting and decay
+        weighted_good_score = 0.0
+        weighted_bad_score = 0.0
+        total_good_weight = 0.0
+        total_bad_weight = 0.0
 
-        # Optionally keep track of the single best match for sub_label
-        top_match_label = None
-        top_match_sub_label = None
-        top_match_score = -999.0
-
-        for r in results:
+        # Track best matches for each category
+        best_good_match = {"score": 0.0, "sub_label": "unknown"}
+        best_bad_match = {"score": 0.0, "sub_label": "unknown"}
+        
+        # Advanced similarity scoring with exponential decay
+        for i, r in enumerate(results):
             sim = r.score
-            lbl = r.payload.get("label", "unknown")      # "good" or "bad"
-            sbl = r.payload.get("sub_label", "unknown")  # e.g. "spam", "business"
-            if sim > top_match_score:
-                top_match_score = sim
-                top_match_label = lbl
-                top_match_sub_label = sbl
-
+            lbl = r.payload.get("label", "unknown")
+            sbl = r.payload.get("sub_label", "unknown")
+            
+            # Apply position-based decay (earlier matches are more important)
+            position_weight = 1.0 / (1.0 + i * 0.1)  # Exponential decay
+            
+            # Apply confidence weighting based on similarity score
+            confidence_weight = min(1.0, sim * 2.0)  # Higher similarity = higher confidence
+            
+            # Combined weight
+            final_weight = position_weight * confidence_weight * sim
+            
             if lbl == "good":
-                sum_good_sim += sim
+                weighted_good_score += final_weight
+                total_good_weight += position_weight * confidence_weight
+                if sim > best_good_match["score"]:
+                    best_good_match = {"score": sim, "sub_label": sbl}
+                    
             elif lbl == "bad":
-                sum_bad_sim += sim
+                weighted_bad_score += final_weight
+                total_bad_weight += position_weight * confidence_weight
+                if sim > best_bad_match["score"]:
+                    best_bad_match = {"score": sim, "sub_label": sbl}
 
-        # Compute "bad" probability
-        bad_prob = sum_bad_sim / (sum_bad_sim + sum_good_sim + 1e-7)
-        bad_score = int(round(bad_prob * 100))
-        closest_label = "bad" if bad_prob >= BAD_PROB_THRESHOLD else "good"
+        # Normalize weighted scores
+        normalized_good_score = weighted_good_score / max(total_good_weight, 1e-7)
+        normalized_bad_score = weighted_bad_score / max(total_bad_weight, 1e-7)
+        
+        # Apply adaptive threshold based on confidence
+        confidence_factor = min(1.0, (len(results) / 50.0))  # More results = higher confidence
+        adaptive_threshold = BAD_PROB_THRESHOLD * (0.8 + 0.4 * confidence_factor)
+        
+        # Enhanced probability calculation with smoothing
+        total_score = normalized_good_score + normalized_bad_score + 1e-7
+        bad_prob = normalized_bad_score / total_score
+        
+        # Apply sigmoid smoothing for more nuanced scoring
+        import math
+        sigmoid_factor = 1.0 / (1.0 + math.exp(-10 * (bad_prob - 0.5)))
+        final_bad_prob = 0.3 * bad_prob + 0.7 * sigmoid_factor
+        
+        bad_score = int(round(final_bad_prob * 100))
+        closest_label = "bad" if final_bad_prob >= adaptive_threshold else "good"
+        
+        # Determine overall best match
+        if best_bad_match["score"] > best_good_match["score"]:
+            top_match_label = "bad"
+            top_match_sub_label = best_bad_match["sub_label"]
+            top_match_score = best_bad_match["score"]
+        else:
+            top_match_label = "good"
+            top_match_sub_label = best_good_match["sub_label"]
+            top_match_score = best_good_match["score"]
 
         reasons = [
-            f"sum_good_sim={sum_good_sim:.3f}",
-            f"sum_bad_sim={sum_bad_sim:.3f}",
+            f"weighted_good_score={normalized_good_score:.3f}",
+            f"weighted_bad_score={normalized_bad_score:.3f}",
+            f"confidence_factor={confidence_factor:.3f}",
+            f"adaptive_threshold={adaptive_threshold:.3f}",
+            f"matches_found={len(results)}"
         ]
-        if top_match_label is not None:
-            reasons.append(f"Top match => {top_match_label}, sub_label={top_match_sub_label}")
+        
+        if top_match_label:
+            reasons.append(f"Top match => {top_match_label}, sub_label={top_match_sub_label}, score={top_match_score:.3f}")
+        
+        # Add category-specific insights
+        if best_good_match["score"] > 0:
+            reasons.append(f"Best good match: {best_good_match['sub_label']} (score={best_good_match['score']:.3f})")
+        if best_bad_match["score"] > 0:
+            reasons.append(f"Best bad match: {best_bad_match['sub_label']} (score={best_bad_match['score']:.3f})")
 
         # If we have no matches at all
-        if sum_good_sim == 0.0 and sum_bad_sim == 0.0:
-            reasons.append("No nearest neighbors labeled 'good' or 'bad' found.")
+        if len(results) == 0:
+            reasons.append("No similar emails found in database")
+            return 50, reasons, "unknown"  # Neutral score when no data
 
         return bad_score, reasons, closest_label
 
