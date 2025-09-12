@@ -46,6 +46,10 @@ print(f"  - Non-Spam (Ham) Emails: {ham_count}\n")
 def get_email_type(label):
     return "spam" if label == 1 else "business"
 
+def get_expected_classification(label):
+    """Convert dataset label to expected classification type for comparison"""
+    return "spam" if label == 1 else "legitimate"
+
 
 def parse_email_text(text):
     """Treat the entire text as the body; use an empty subject."""
@@ -87,7 +91,7 @@ def analyze_email(row, idx):
     Returns a dict for CSV export & final stats.
     """
     subject, body = parse_email_text(row["Text"])
-    expected_type = get_email_type(row["Spam"])
+    expected_type = get_expected_classification(row["Spam"])  # "spam" or "legitimate"
 
     payload = {
         "subject": subject,
@@ -104,8 +108,8 @@ def analyze_email(row, idx):
                 "PredictedType": "ERROR",
                 "PhishingScore": None,
                 "Confidence": "ERROR",
-                "PhishSim": None,
-                "LegitSim": None,
+                "BadSim": None,
+                "GoodSim": None,
                 "Correctness": "AnalyzeFailed",
             }
 
@@ -114,23 +118,23 @@ def analyze_email(row, idx):
         confidence_level = response_data.get("confidence_level", "Unknown")
         reasons = response_data.get("reasons", [])
 
-        # Attempt to parse "PhishSim=xx, LegitSim=yy" from any reason string
-        phish_sim = None
-        legit_sim = None
+        # Extract "weighted_bad_score=xx, weighted_good_score=yy" from reasons
+        bad_sim = None
+        good_sim = None
         for reason in reasons:
-            match = re.search(r"PhishSim=([\d.]+).*LegitSim=([\d.]+)", reason)
-            if match:
-                phish_sim = float(match.group(1))
-                legit_sim = float(match.group(2))
-                break
+            if "weighted_bad_score=" in reason:
+                bad_sim = float(reason.split("=")[1])
+            elif "weighted_good_score=" in reason:
+                good_sim = float(reason.split("=")[1])
 
-        # Decide predicted type
-        predicted_type = "spam" if phishing_score >= 70 else "business"
+        # Use the actual API threshold (60%) to determine classification
+        # The API returns bad_score as percentage (0-100)
+        predicted_type = "spam" if phishing_score >= 60 else "legitimate"
 
         # Determine correctness
         if predicted_type == expected_type:
             correctness = "Correct"
-        elif predicted_type == "phishing" and expected_type == "legitimate":
+        elif predicted_type == "spam" and expected_type == "legitimate":
             correctness = "FalsePositive"
         else:
             correctness = "FalseNegative"
@@ -141,8 +145,8 @@ def analyze_email(row, idx):
             "PredictedType": predicted_type,
             "PhishingScore": phishing_score,
             "Confidence": confidence_level,
-            "PhishSim": phish_sim,
-            "LegitSim": legit_sim,
+            "BadSim": bad_sim,
+            "GoodSim": good_sim,
             "Correctness": correctness
         }
     except Exception as e:
@@ -153,8 +157,8 @@ def analyze_email(row, idx):
             "PredictedType": "ERROR",
             "PhishingScore": None,
             "Confidence": "ERROR",
-            "PhishSim": None,
-            "LegitSim": None,
+            "BadSim": None,
+            "GoodSim": None,
             "Correctness": "AnalyzeException"
         }
 
@@ -201,8 +205,8 @@ medium_confidence = sum(1 for r in tested_rows if r["Confidence"] == "Medium")
 low_confidence = sum(1 for r in tested_rows if r["Confidence"] == "Low")
 
 # Similarity scores
-phish_sims = [r["PhishSim"] for r in tested_rows if r["PhishSim"] is not None]
-legit_sims = [r["LegitSim"] for r in tested_rows if r["LegitSim"] is not None]
+bad_sims = [r["BadSim"] for r in tested_rows if r["BadSim"] is not None]
+good_sims = [r["GoodSim"] for r in tested_rows if r["GoodSim"] is not None]
 
 # Calculate final metrics
 if total_tested > 0:
@@ -224,12 +228,12 @@ if total_tested > 0:
     print(f"Medium Confidence: {medium_confidence} ({medium_confidence_rate:.2f}%)")
     print(f"Low Confidence: {low_confidence} ({low_confidence_rate:.2f}%)")
 
-    if phish_sims and legit_sims:
-        avg_phish = sum(phish_sims) / len(phish_sims)
-        avg_legit = sum(legit_sims) / len(legit_sims)
+    if bad_sims and good_sims:
+        avg_bad = sum(bad_sims) / len(bad_sims)
+        avg_good = sum(good_sims) / len(good_sims)
         print("\n🔎 Similarity Statistics:")
-        print(f"Avg PhishSim: {avg_phish:.3f}")
-        print(f"Avg LegitSim: {avg_legit:.3f}")
+        print(f"Avg BadSim: {avg_bad:.3f}")
+        print(f"Avg GoodSim: {avg_good:.3f}")
 else:
     print("\n❌ No emails were tested or all failed analysis. Check dataset or API.")
 
@@ -243,8 +247,8 @@ fieldnames = [
     "PredictedType",
     "PhishingScore",
     "Confidence",
-    "PhishSim",
-    "LegitSim",
+    "BadSim",
+    "GoodSim",
     "Correctness"
 ]
 

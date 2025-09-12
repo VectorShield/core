@@ -87,8 +87,8 @@ def analyze_file(eml_data: dict, expected_type: str, filename: str):
         return {
             "filename": filename,
             "confidence": "ERROR",
-            "PhishSim": None,
-            "LegitSim": None,
+            "BadSim": None,
+            "GoodSim": None,
             "ScanResult": "ERROR",
             "ExpectedResult": expected_type,
             "MisclassificationType": "AnalyzeFailed",
@@ -99,24 +99,23 @@ def analyze_file(eml_data: dict, expected_type: str, filename: str):
     confidence_level = data.get("confidence_level", "Unknown")
     reasons = data.get("reasons", [])
 
-    # Attempt to parse "PhishSim=xx, LegitSim=yy" from reasons
-    phish_sim = None
-    legit_sim = None
+    # Extract "weighted_bad_score=xx, weighted_good_score=yy" from reasons
+    bad_sim = None
+    good_sim = None
     for reason in reasons:
-        match = re.search(r"PhishSim=([\d.]+).*LegitSim=([\d.]+)", reason)
-        if match:
-            phish_sim = float(match.group(1))
-            legit_sim = float(match.group(2))
-            break
+        if "weighted_bad_score=" in reason:
+            bad_sim = float(reason.split("=")[1])
+        elif "weighted_good_score=" in reason:
+            good_sim = float(reason.split("=")[1])
 
-    # We'll label predicted as phishing if phishing_score >= 70
-    predicted_type = "spam" if phishing_score >= 70 else "business"
-
+    # Use the actual API threshold (60%) to determine classification
+    # The API returns bad_score as percentage (0-100)
+    predicted_type = "spam" if phishing_score >= 60 else "legitimate"
 
     # Determine misclassification type
     if predicted_type == expected_type:
         misclass_type = "Correct"
-    elif predicted_type == "phishing" and expected_type == "legitimate":
+    elif predicted_type == "spam" and expected_type == "legitimate":
         misclass_type = "FalsePositive"
     else:
         misclass_type = "FalseNegative"
@@ -124,8 +123,8 @@ def analyze_file(eml_data: dict, expected_type: str, filename: str):
     return {
         "filename": filename,
         "confidence": confidence_level,
-        "PhishSim": phish_sim,
-        "LegitSim": legit_sim,
+        "BadSim": bad_sim,
+        "GoodSim": good_sim,
         "ScanResult": predicted_type,
         "ExpectedResult": expected_type,
         "MisclassificationType": misclass_type,
@@ -180,8 +179,8 @@ def write_results_to_csv(rows, output_file="results.csv"):
     fieldnames = [
         "filename",
         "confidence",
-        "PhishSim",
-        "LegitSim",
+        "BadSim",
+        "GoodSim",
         "ScanResult",
         "ExpectedResult",
         "MisclassificationType"
@@ -210,7 +209,7 @@ def main():
     # 🛠️ TEST STEP (Analyze)
     # -------------------------------
     print("\n=== TEST PHASE: Checking model predictions on EML files ===")
-    process_folder(SPAM_FOLDER, label="phishing", do_insert=False, do_analyze=True, max_analyze_workers=4)
+    process_folder(SPAM_FOLDER, label="spam", do_insert=False, do_analyze=True, max_analyze_workers=4)
     process_folder(HAM_FOLDER,  label="legitimate", do_insert=False, do_analyze=True, max_analyze_workers=4)
 
     if not analysis_results:

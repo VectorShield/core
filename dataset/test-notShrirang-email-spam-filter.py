@@ -60,6 +60,10 @@ print(f"  - Non-Spam (Ham) Emails: {ham_count}\n")
 def get_email_type(label):
     return "spam" if label == 1 else "business"
 
+def get_expected_classification(label):
+    """Convert dataset label to expected classification type for comparison"""
+    return "spam" if label == 1 else "legitimate"
+
 
 def parse_email_text(text):
     """
@@ -105,12 +109,12 @@ def analyze_email(row, idx):
       - PredictedType
       - PhishingScore
       - Confidence
-      - PhishSim / LegitSim (parsed from 'reasons')
+      - BadSim / GoodSim (parsed from 'reasons')
       - Correctness (Correct, FalsePositive, FalseNegative)
     Returns a dict for CSV export & stats.
     """
     subject, body = parse_email_text(row["Text"])
-    expected_type = get_email_type(row["Spam"])
+    expected_type = get_expected_classification(row["Spam"])  # "spam" or "legitimate"
 
     payload = {
         "subject": subject,
@@ -127,8 +131,8 @@ def analyze_email(row, idx):
                 "PredictedType": "ERROR",
                 "PhishingScore": None,
                 "Confidence": "ERROR",
-                "PhishSim": None,
-                "LegitSim": None,
+                "BadSim": None,
+                "GoodSim": None,
                 "Correctness": "AnalyzeFailed"
             }
 
@@ -137,21 +141,22 @@ def analyze_email(row, idx):
         confidence_level = data.get("confidence_level", "Unknown")
         reasons = data.get("reasons", [])
 
-        # Extract "PhishSim=xx, LegitSim=yy" from reasons if present
-        phish_sim = None
-        legit_sim = None
+        # Extract "weighted_bad_score=xx, weighted_good_score=yy" from reasons
+        bad_sim = None
+        good_sim = None
         for reason in reasons:
-            match = re.search(r"PhishSim=([\d.]+).*LegitSim=([\d.]+)", reason)
-            if match:
-                phish_sim = float(match.group(1))
-                legit_sim = float(match.group(2))
-                break
+            if "weighted_bad_score=" in reason:
+                bad_sim = float(reason.split("=")[1])
+            elif "weighted_good_score=" in reason:
+                good_sim = float(reason.split("=")[1])
 
-        predicted_type = "phishing" if phishing_score >= 70 else "legitimate"
+        # Use the actual API threshold (60%) to determine classification
+        # The API returns bad_score as percentage (0-100)
+        predicted_type = "spam" if phishing_score >= 60 else "legitimate"
 
         if predicted_type == expected_type:
             correctness = "Correct"
-        elif predicted_type == "phishing" and expected_type == "legitimate":
+        elif predicted_type == "spam" and expected_type == "legitimate":
             correctness = "FalsePositive"
         else:
             correctness = "FalseNegative"
@@ -162,8 +167,8 @@ def analyze_email(row, idx):
             "PredictedType": predicted_type,
             "PhishingScore": phishing_score,
             "Confidence": confidence_level,
-            "PhishSim": phish_sim,
-            "LegitSim": legit_sim,
+            "BadSim": bad_sim,
+            "GoodSim": good_sim,
             "Correctness": correctness
         }
     except Exception as e:
@@ -174,8 +179,8 @@ def analyze_email(row, idx):
             "PredictedType": "ERROR",
             "PhishingScore": None,
             "Confidence": "ERROR",
-            "PhishSim": None,
-            "LegitSim": None,
+            "BadSim": None,
+            "GoodSim": None,
             "Correctness": "AnalyzeException"
         }
 
@@ -239,8 +244,8 @@ fieldnames = [
     "PredictedType",
     "PhishingScore",
     "Confidence",
-    "PhishSim",
-    "LegitSim",
+    "BadSim",
+    "GoodSim",
     "Correctness"
 ]
 

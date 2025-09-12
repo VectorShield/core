@@ -28,6 +28,10 @@ except FileNotFoundError:
 def get_email_type(label):
     return "spam" if label == 1 else "business"
 
+def get_expected_classification(label):
+    """Convert dataset label to expected classification type for comparison"""
+    return "spam" if label == 1 else "legitimate"
+
 
 # -------------------------------
 # 🚀 Test Script Configuration
@@ -90,7 +94,7 @@ for index, row in tqdm(sample_data.iterrows(), total=len(sample_data), desc="Ana
         email_subject = row["Subject"] if pd.notna(row["Subject"]) else "No Subject"
         email_sender = row["From"] if pd.notna(row["From"]) else "unknown@enron.com"
         label_raw = row["Label"] if pd.notna(row["Label"]) else 0
-        expected_type = get_email_type(label_raw)
+        expected_type = get_expected_classification(label_raw)  # "spam" or "legitimate"
 
         if expected_type == "spam":
             spam_count += 1
@@ -123,13 +127,13 @@ for index, row in tqdm(sample_data.iterrows(), total=len(sample_data), desc="Ana
                 very_low_confidence += 1
 
             # Use threshold from config (60%) converted to score
-            predicted_type = "spam" if response_data["phishing_score"] >= 60 else "business"
+            predicted_type = "spam" if response_data["phishing_score"] >= 60 else "legitimate"
 
             if predicted_type == expected_type:
                 correct_classifications += 1
-            elif predicted_type == "spam" and expected_type == "business":
+            elif predicted_type == "spam" and expected_type == "legitimate":
                 false_positives += 1
-            elif predicted_type == "business" and expected_type == "spam":
+            elif predicted_type == "legitimate" and expected_type == "spam":
                 false_negatives += 1
 
             # Parse "sum_bad_sim=..., sum_good_sim=..." from reasons (if present)
