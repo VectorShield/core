@@ -7,8 +7,11 @@ from .routes.metrics import PrometheusMiddleware, metrics_router
 from .routes.insert import insert_router
 from .database import ensure_collection_exists
 from .routes.analyze import analyze_router
+from .routes.enhanced_analyze import enhanced_analyze_router
 from .routes.report import report_router
 from .routes.parse_eml import parse_eml_router
+from .routes.docs import docs_router
+from .middleware import SecurityHeadersMiddleware
 from .batch_upsert import init_batch_upsert
 import logging
 import sentry_sdk
@@ -41,14 +44,30 @@ async def lifespan(app: FastAPI):
 # Now pass `lifespan=lifespan` to the app:
 app = FastAPI(title=API_TITLE, version=API_VERSION, lifespan=lifespan)
 
-# CORS middleware
+# CORS middleware - configured for web UI access
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # or specify e.g. ["http://localhost:8000"] for stricter security
+    allow_origins=["*"],  # Allow all origins for web UI access
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=[
+        "*",
+        "Authorization",
+        "Content-Type",
+        "X-Requested-With",
+        "Accept",
+        "Origin",
+        "User-Agent",
+        "Cache-Control",
+        "Pragma",
+        "X-Custom-Header"
+    ],
+    expose_headers=["*"],
+    max_age=3600  # Cache preflight requests for 1 hour
 )
+
+# Add security headers middleware
+app.add_middleware(SecurityHeadersMiddleware)
 
 # Then do your normal setup
 app.add_middleware(PrometheusMiddleware)
@@ -56,8 +75,10 @@ app.add_middleware(PrometheusMiddleware)
 app.include_router(metrics_router)
 app.include_router(insert_router)
 app.include_router(analyze_router)
+app.include_router(enhanced_analyze_router)
 app.include_router(report_router)
 app.include_router(parse_eml_router)
+app.include_router(docs_router)
 
 logger.info("API started")
 

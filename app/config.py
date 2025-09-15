@@ -14,7 +14,10 @@ API_VERSION = "1.0.0"
 #QDRANT_URL = os.getenv("QDRANT_URL", "http://192.168.117.177:6333")
 QDRANT_URL = os.getenv("QDRANT_URL", "http://172.17.0.1:6333")
 COLLECTION_NAME = "emails"
-BAD_PROB_THRESHOLD = float(os.getenv("BAD_PROB_THRESHOLD", "0.6"))
+BAD_PROB_THRESHOLD = float(os.getenv("BAD_PROB_THRESHOLD", "0.52"))
+
+# Security settings
+DISABLE_CSP = os.getenv("DISABLE_CSP", "true").lower() == "true"
 
 # model
 # MODEL_PATH = os.getenv("MODEL_PATH", "models/deberta-v3-base")
@@ -36,8 +39,8 @@ BAD_PROB_THRESHOLD = float(os.getenv("BAD_PROB_THRESHOLD", "0.6"))
 # Avg PhishSim: 8.538
 # Avg LegitSim: 41.449
 
-MODEL_NAME = os.getenv("MODEL_NAME", "sentence-transformers/all-MiniLM-L6-v2")
-MODEL_PATH = os.getenv("MODEL_PATH", "models/all-MiniLM-L6-v2")
+MODEL_NAME = os.getenv("MODEL_NAME", "BAAI/bge-small-en-v1.5")
+MODEL_PATH = os.getenv("MODEL_PATH", "models/bge-small-en-v1.5")
 MODEL_DIMENSION = int(os.getenv("MODEL_DIMENSION", "384"))
 # Total Emails Tested: 1865
 # Total Spam Emails Tested: 465

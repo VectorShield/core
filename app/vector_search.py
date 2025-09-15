@@ -303,8 +303,8 @@ async def check_email_similarity(email_feats: dict):
             fallback_text = f"{email_feats.get('subject','')} {email_feats.get('body_preview','')}"
             vector_embedding = embed_text_cached(fallback_text)
 
-        # Use adaptive limit based on available data
-        adaptive_limit = min(100, max(20, len(embedding_cache) // 100))
+        # Use higher limit for better coverage
+        adaptive_limit = min(200, max(50, len(embedding_cache) // 50))
         
         results = await client.search(
             collection_name=COLLECTION_NAME,
@@ -313,62 +313,39 @@ async def check_email_similarity(email_feats: dict):
             score_threshold=0.005  # Lower threshold to catch more subtle similarities
         )
 
-        # Enhanced scoring with confidence weighting and decay
-        weighted_good_score = 0.0
-        weighted_bad_score = 0.0
-        total_good_weight = 0.0
-        total_bad_weight = 0.0
+        # Simple similarity-based scoring
+        good_similarity_sum = 0.0
+        bad_similarity_sum = 0.0
 
         # Track best matches for each category
         best_good_match = {"score": 0.0, "sub_label": "unknown"}
         best_bad_match = {"score": 0.0, "sub_label": "unknown"}
         
-        # Advanced similarity scoring with exponential decay
-        for i, r in enumerate(results):
+        # Simple accumulation of similarity scores
+        for r in results:
             sim = r.score
             lbl = r.payload.get("label", "unknown")
             sbl = r.payload.get("sub_label", "unknown")
             
-            # Apply position-based decay (earlier matches are more important)
-            position_weight = 1.0 / (1.0 + i * 0.1)  # Exponential decay
-            
-            # Apply confidence weighting based on similarity score
-            confidence_weight = min(1.0, sim * 2.0)  # Higher similarity = higher confidence
-            
-            # Combined weight
-            final_weight = position_weight * confidence_weight * sim
-            
             if lbl == "good":
-                weighted_good_score += final_weight
-                total_good_weight += position_weight * confidence_weight
+                good_similarity_sum += sim
                 if sim > best_good_match["score"]:
                     best_good_match = {"score": sim, "sub_label": sbl}
                     
             elif lbl == "bad":
-                weighted_bad_score += final_weight
-                total_bad_weight += position_weight * confidence_weight
+                bad_similarity_sum += sim
                 if sim > best_bad_match["score"]:
                     best_bad_match = {"score": sim, "sub_label": sbl}
 
-        # Normalize weighted scores
-        normalized_good_score = weighted_good_score / max(total_good_weight, 1e-7)
-        normalized_bad_score = weighted_bad_score / max(total_bad_weight, 1e-7)
+        # Simple ratio-based scoring
+        total_similarity = good_similarity_sum + bad_similarity_sum
+        if total_similarity > 0:
+            bad_prob = bad_similarity_sum / total_similarity
+        else:
+            bad_prob = 0.5  # Neutral when no matches
         
-        # Apply adaptive threshold based on confidence
-        confidence_factor = min(1.0, (len(results) / 50.0))  # More results = higher confidence
-        adaptive_threshold = BAD_PROB_THRESHOLD * (0.8 + 0.4 * confidence_factor)
-        
-        # Enhanced probability calculation with smoothing
-        total_score = normalized_good_score + normalized_bad_score + 1e-7
-        bad_prob = normalized_bad_score / total_score
-        
-        # Apply sigmoid smoothing for more nuanced scoring
-        import math
-        sigmoid_factor = 1.0 / (1.0 + math.exp(-10 * (bad_prob - 0.5)))
-        final_bad_prob = 0.3 * bad_prob + 0.7 * sigmoid_factor
-        
-        bad_score = int(round(final_bad_prob * 100))
-        closest_label = "bad" if final_bad_prob >= adaptive_threshold else "good"
+        bad_score = int(round(bad_prob * 100))
+        closest_label = "bad" if bad_prob >= BAD_PROB_THRESHOLD else "good"
         
         # Determine overall best match
         if best_bad_match["score"] > best_good_match["score"]:
@@ -381,10 +358,10 @@ async def check_email_similarity(email_feats: dict):
             top_match_score = best_good_match["score"]
 
         reasons = [
-            f"weighted_good_score={normalized_good_score:.3f}",
-            f"weighted_bad_score={normalized_bad_score:.3f}",
-            f"confidence_factor={confidence_factor:.3f}",
-            f"adaptive_threshold={adaptive_threshold:.3f}",
+            f"good_similarity_sum={good_similarity_sum:.3f}",
+            f"bad_similarity_sum={bad_similarity_sum:.3f}",
+            f"bad_probability={bad_prob:.3f}",
+            f"threshold={BAD_PROB_THRESHOLD:.3f}",
             f"matches_found={len(results)}"
         ]
         

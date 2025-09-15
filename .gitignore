@@ -1,6 +1,8 @@
 enron_data_fraud_labeled.*
 dataset/**.csv
 dataset/**.zip
+dataset/eml_datasets/
+dataset/download_summary_*.json
 __pycache__/**
 progress.txt
 models/*
